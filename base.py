@@ -10,7 +10,6 @@ os.environ["CASAPATH"]="/home/jon/casa-src/casa linux"
 
 from casac import casac as _casac
 
-
 dirty_api = _casac.image()
 dirty_image = dirty_api.newimage(infile="./img/testImage.residual")
 dirty_map = np.reshape(dirty_image.getchunk(), (512, 512))
@@ -24,6 +23,7 @@ def vis_wv_meyeraux(x):
     y = 35 * x ^ 4 - 84 * x ^ 5 + 70 * x ^ 6 - 20 * x ^ 7
     return y*(x >= 0)*(x <= 1) + (x > 1)
 
+
 def vis_wv_meyer_wavelet(omega):
     x = abs(omega)
     int1 = ((x > math.Pi/4.) and (x <= math.Pi/2.))
@@ -31,6 +31,7 @@ def vis_wv_meyer_wavelet(omega):
     y = int1 * math.sin(math.Pi/2.*vis_wv_meyeraux(4.*x/math.Pi-1))
     y = y + int2 * math.cos(math.Pi/2*vis_wv_meyeraux(2.*x/math.Pi-1))
     return y
+
 
 def vis_wv_meyer_scaling(omega):
     x = abs(omega)
@@ -44,16 +45,18 @@ def vis_wv_meyer_scaling(omega):
 
     return y
 
+
 def vis_wv_linspace(base, limit, n):
     #Provides a row vector V with N linearly spaced elements between BASE and LIMIT;
     v = base + np.arange(n) * (limit - base) / (n - 1)
     return v
 
+#waaaaat? this looks VERY stupid and borderline borked
 def vis_wv_repmat(M0, nc, nr):
     M = M0
     y = 1
     n = max([nc, nr])
-    ndims = M.shape.size()
+    ndims = len(M.shape)
     sm = M.shape
 
     mx = 1
@@ -66,44 +69,49 @@ def vis_wv_repmat(M0, nc, nr):
 
     while y < n:
         y = y * 2
-        sdmis = M.shape.size()
+        sdmims = len(M.shape)
         sms = M.shape
         smx = 1
         smy = 1
-        if ndims == 1:
+        if sdmims == 1:
             smx = sms[0]
-        if ndims > 1:
+        if sdmims > 1:
             smx = sms[0]
             smy = sms[1]
-        M2 = np.zeros(2 * smx, 2 * smy)
-        M2[0:smx - 1, 0:smy - 1] = M
-        M2[smx:2 * smx - 1, 0:smy - 1] = M
-        M2[0:smx - 1, smy:2 * smy - 1] = M
-        M2[smx:2 * smx - 1, smy:2 * smy - 1] = M
+        M2 = np.zeros((2 * smx, 2 * smy), dtype=np.float64)
+        reshaped = np.reshape(M, (smx, smy))
+        M2[0:smx, 0:smy] = reshaped
+        M2[smx:2 * smx, 0:smy] = reshaped
+        M2[0:smx, smy:2 * smy] = reshaped
+        M2[smx:2 * smx, smy:2 * smy] = reshaped
         M = M2
 
-    M = M[0:(nc * mx - 1), 0:(nr * my - 1)]
+    M = M[0:(nc * mx), 0:(nr * my)]
     return M
 
 
 def vis_wv_fiwt_spectra(imsize, nscales):
-
     #for better symmetrie each n should be odd
     n_orig = imsize
     n_new = imsize + (1 - (imsize % 2))
 
-    X = 2. ^ (nscales - 1)
+    X = 2. ** (nscales - 1)
     xi_x_init = vis_wv_linspace(0, X, (n_new + 1) / 2)
-    #also reverse() of IDL probably interprets 1 as the default axis (probably axis 0 for numpy)
-    xi_x_init = [-np.flip(xi_x_init[1:(xi_x_init.size()-1)],1), xi_x_init] #!!!!!! BUG, elements are not the same size. 0 or 1 index begin?
-    lx = xi_x_init.size()
-    ly = xi_x_init.size()
+    xi_x_init_flipped = xi_x_init[1:xi_x_init.size]
+    xi_x_init_flipped = xi_x_init_flipped[::-1]*-1
+    xi_x_init = np.concatenate([xi_x_init_flipped, xi_x_init])
+    xi_y_init = xi_x_init[::-1]
+
+    xi_x_init = np.reshape(xi_x_init,(xi_x_init.size,1))
+    xi_y_init= np.reshape(xi_y_init,(xi_x_init.size,1))
+    lx = xi_x_init.size
+    ly = xi_y_init.size
     xi_x = vis_wv_repmat(xi_x_init,1,ly)
-    xi_y = vis_wv_repmat(np.transpose(-np.flip(xi_x_init,1)),lx,1)
+    xi_y = vis_wv_repmat(np.transpose(xi_y_init),lx, 1)
     #end bug for sure
 
     #init
-    psi = np.zeros((nscales+1), n_new, n_new)
+    psi = np.zeros(((nscales+1), n_new, n_new))
     psi[0] = vis_wv_meyer_scaling(np.sqrt(xi_x**2 + xi_y**2))
     for j in range(0,nscales-1):
         a = 2.**(-j)
@@ -113,22 +121,27 @@ def vis_wv_fiwt_spectra(imsize, nscales):
     return psi[0:(nscales+1), 0:n_orig, 0:n_orig]
 
 
-
-
 def vis_wv_fiwt(x, psi):
     # foward transform
     nscales = psi.shape.size
 
     xft = fourier.fftshift(fourier.rfft2(x))
-    xft3 = 0 #replicate(complex(0., 0.), nscales, psi.shape[0], psi.shape[1])
+    xft3 = np.zeros(nscales, psi.shape[0], psi.shape[1], dtype=np.complex128)
     for j in range(0, nscales-1):
         print("bla")
-        #xft3[j, *, *] = fft(reform(psi[j, *, *])*xft, / inverse, / center)
+        xft3[j] = fourier.irfft(fourier.ifftshift(psi[j]*xft))
 
-    return 0
+    return xft3
+
 
 def vis_wv_fiwt_inverse(x, psi):
-    return 0
+    nscales = psi.shape.size
+
+    r = np.zeros(nscales, psi.shape[0], psi.shape[1], dtype=complex)
+    for j in range(0, nscales-1):
+        r[j] = fourier.fftshift(fourier.rfft2(x[j]))*psi[j]
+
+    return fourier.irfft(fourier.ifftshift(r.sum(1))) #possible bug: wrong dimension to sum over
 
 
 def vis_wv(vis, imsize, NSCALES=3):
