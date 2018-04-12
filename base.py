@@ -11,11 +11,11 @@ os.environ["CASAPATH"]="/home/jon/casa-src/casa linux"
 from casac import casac as _casac
 
 dirty_api = _casac.image()
-dirty_image = dirty_api.newimage(infile="./img/testimage.16.residual")
-dirty_map = np.reshape(dirty_image.getchunk(), (16, 16))
+dirty_image = dirty_api.newimage(infile="./img/17x17pixels/test.residual")
+dirty_map = np.reshape(dirty_image.getchunk(), (17, 17))
 psf_api = _casac.image()
-psf_image = psf_api.newimage(infile="./img/testimage.16.psf")
-psf_map = np.reshape(psf_image.getchunk(), (16, 16))
+psf_image = psf_api.newimage(infile="./img/17x17pixels/test.psf")
+psf_map = np.reshape(psf_image.getchunk(), (17, 17))
 
 #spectra helper methods
 #!!!!!! Less than and greater than may be reversed!!!
@@ -172,7 +172,7 @@ def vis_wv(vis, imsize, NSCALES=3):
     Y = X_iter
     t_new = 1
 
-    for i in range(0, 200):
+    for i in range(0, 1):
         X_old = X_iter
         t_old = t_new
 
@@ -184,7 +184,7 @@ def vis_wv(vis, imsize, NSCALES=3):
 
         #soft thresholding
         D = abs(WY) - lamb/L
-        WY = np.sign(abs(WY) * ((D > 0) * D))
+        WY = np.sign(abs(WY)) * ((D > 0) * D)
 
         #the new iterate inverse wavelet transform of WY
         X_iter = vis_wv_fiwt_inverse(WY, psi)
@@ -213,8 +213,8 @@ imsize = (16, 16)
 output = vis_wv(0, imsize, NSCALES=3)
 
 out_api = _casac.image()
-out_image = out_api.newimage(infile="./img/testimage.16.output")
-out_reshaped = np.reshape(output, (16, 16, 1, 1))
+out_image = out_api.newimage(infile="./img/17x17pixels/test.output")
+out_reshaped = np.reshape(output, (17, 17, 1, 1))
 out_image.putchunk(out_reshaped)
 out_image.close()
 
