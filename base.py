@@ -172,7 +172,7 @@ def vis_wv(vis, imsize, NSCALES=3):
     Y = X_iter
     t_new = 1
 
-    for i in range(0, 1):
+    for i in range(0, 200):
         X_old = X_iter
         t_old = t_new
 
@@ -209,7 +209,7 @@ def vis_wv(vis, imsize, NSCALES=3):
 
     return np.real(X_iter * (X_iter > 0))
 
-imsize = (16, 16)
+imsize = (17, 17)
 output = vis_wv(0, imsize, NSCALES=3)
 
 out_api = _casac.image()
