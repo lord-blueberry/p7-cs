@@ -12,15 +12,19 @@ from casac import casac as _casac
 
 dirty_api = _casac.image()
 dirty_image = dirty_api.newimage(infile="./img/17x17pixels/test.residual")
-dirty_map = np.reshape(dirty_image.getchunk(), (17, 17))
+dirty_map = np.transpose(np.reshape(dirty_image.getchunk(), (17, 17)))
 psf_api = _casac.image()
 psf_image = psf_api.newimage(infile="./img/17x17pixels/test.psf")
-psf_map = np.reshape(psf_image.getchunk(), (17, 17))
+psf_map = np.transpose(np.reshape(psf_image.getchunk(), (17, 17)))
+
+np.savetxt("img.csv",dirty_map, delimiter=",")
+np.savetxt("psf.csv",psf_map,delimiter=",")
+
 
 #spectra helper methods
 #!!!!!! Less than and greater than may be reversed!!!
 def vis_wv_meyeraux(x):
-    y = 35 * (x**4) - 84 * (x**5) + 70 * (x**6) - 20 *(x**7)
+    y = 35 * (x**4) - 84 * (x**5) + 70 * (x**6) - 20 * (x**7)
     return y*(x >= 0)*(x <= 1) + (x > 1)
 
 
@@ -65,7 +69,7 @@ def vis_wv_repmat(M0, nc, nr):
         mx = sm[0]
     if ndims > 1:
         mx = sm[0]
-        my= sm[1]
+        my = sm[1]
 
     while y < n:
         y = y * 2
@@ -95,7 +99,6 @@ def vis_wv_fiwt_spectra(imsize, nscales):
     n_orig = imsize
     n_new = imsize + (1 - (imsize % 2))
 
-    #begin bug likely section
     X = 2. ** (nscales - 1)
     xi_x_init = vis_wv_linspace(0, X, (n_new + 1) / 2)
     xi_x_init_flipped = xi_x_init[1:xi_x_init.size]
@@ -109,7 +112,6 @@ def vis_wv_fiwt_spectra(imsize, nscales):
     ly = xi_y_init.size
     xi_x = vis_wv_repmat(xi_x_init, 1, ly)
     xi_y = vis_wv_repmat(np.transpose(xi_y_init), lx, 1)
-    #end bug likely sectione
 
     #init
     psi = np.zeros(((nscales+1), n_new, n_new))
@@ -122,17 +124,24 @@ def vis_wv_fiwt_spectra(imsize, nscales):
     return psi[0:(nscales+1), 0:n_orig, 0:n_orig]
 
 
+def idl_fft(x):
+    return fourier.fft2(x)/x.size
+
+def idl_ifft(X):
+    return fourier.ifft2(X)*X.size
+
+
 def vis_wv_fiwt(x, psi):
     # foward transform
     nscales = psi.shape[0]
 
-    xft = fourier.fftshift(fourier.fft2(x))
-    xft3 = np.zeros((nscales, psi.shape[1], psi.shape[2]), dtype=np.float64)
+    xft = fourier.fftshift(idl_fft(x))
+    xft3 = np.zeros((nscales, psi.shape[1], psi.shape[2]), dtype=np.complex128)
     for j in range(0, nscales):
         tmp1= xft
         tmp2= psi[j]
         tmp3=psi[j]*xft
-        xft3[j] = fourier.ifft2(fourier.ifftshift(psi[j]*xft))
+        xft3[j] = idl_ifft(fourier.ifftshift(psi[j]*xft))
 
     return xft3
 
@@ -147,23 +156,24 @@ def vis_wv_fiwt_inverse(x, psi):
         tmp2 = x[j]
         tmp3 = fourier.fft2(x[j])
         tmp4 = tmp3*tmp1
-        r[j] = fourier.fftshift(fourier.fft2(x[j]))*psi[j]
+        r[j] = fourier.fftshift(idl_fft(x[j]))*psi[j]
 
-    return fourier.ifft2(fourier.ifftshift(r.sum(0))) #possible bug: wrong dimension to sum over
+    return idl_ifft(fourier.ifftshift(r.sum(0))) #possible bug: wrong dimension to sum over
+
+
 
 
 def vis_wv(vis, imsize, NSCALES=3):
     lamb = 0.05
     psi = vis_wv_fiwt_spectra(imsize[0], NSCALES)
-    dc = dirty_map.sum()/dirty_map.size
+    dc = (dirty_map * (dirty_map > 0)).sum()/dirty_map.size
 
     B = dirty_map * (dc / dirty_map.sum())
-    P = psf_map/psf_map.sum()
+    P = psf_map / psf_map.sum()
 
-    Btrans= fourier.fft2(B)
-
-    center=imsize[0]/2
-    P = fourier.fft2(np.roll(P, 1-center))*P.size #possible bug
+    Btrans= idl_fft(B)
+    center = imsize[0]/2
+    P = idl_fft(np.transpose(np.roll(np.transpose(P), 1 - center)))*P.size #possible bug
     L = 2 * np.max(abs(P) ** 2)
 
     #init
@@ -172,13 +182,13 @@ def vis_wv(vis, imsize, NSCALES=3):
     Y = X_iter
     t_new = 1
 
-    for i in range(0, 200):
+    for i in range(0, 1):
         X_old = X_iter
         t_old = t_new
 
         #gradient step
-        D = P * fourier.fft2(Y) - Btrans
-        Y = Y -2.0/L * fourier.ifft2(np.conj(P)*D)
+        D = P * idl_fft(Y) - Btrans
+        Y = Y -2.0/L * idl_fft(np.conj(P)*D)
 
         WY = vis_wv_fiwt(np.real(Y), psi)
 
@@ -197,7 +207,7 @@ def vis_wv(vis, imsize, NSCALES=3):
         Y = X_iter + ((t_old - 1) / t_new) * (X_iter - X_old)
 
         #evaluating
-        residual = B - np.real(fourier.ifft2(P*fourier.fft2(X_iter))) #energy conservation?
+        residual = B - np.real(idl_ifft(P*idl_fft(X_iter))) #energy conservation?
         likelyhood = np.sum(np.square(np.abs(residual)))
         sparsity = np.sum(np.abs(vis_wv_fiwt(X_iter, psi)))
 
