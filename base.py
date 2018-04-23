@@ -10,15 +10,13 @@ os.environ["CASAPATH"]="/home/jon/casa-src/casa linux"
 
 from casac import casac as _casac
 
-dirty_api = _casac.image()
-dirty_image = dirty_api.newimage(infile="./img/17x17pixels/test.residual")
-dirty_map = np.transpose(np.reshape(dirty_image.getchunk(), (17, 17)))
-psf_api = _casac.image()
-psf_image = psf_api.newimage(infile="./img/17x17pixels/test.psf")
-psf_map = np.transpose(np.reshape(psf_image.getchunk(), (17, 17)))
 
-np.savetxt("img.csv",dirty_map, delimiter=",")
-np.savetxt("psf.csv",psf_map,delimiter=",")
+
+
+
+
+
+
 
 
 #spectra helper methods
@@ -127,6 +125,7 @@ def vis_wv_fiwt_spectra(imsize, nscales):
 def idl_fft(x):
     return fourier.fft2(x)/x.size
 
+
 def idl_ifft(X):
     return fourier.ifft2(X)*X.size
 
@@ -138,9 +137,6 @@ def vis_wv_fiwt(x, psi):
     xft = fourier.fftshift(idl_fft(x))
     xft3 = np.zeros((nscales, psi.shape[1], psi.shape[2]), dtype=np.complex128)
     for j in range(0, nscales):
-        tmp1= xft
-        tmp2= psi[j]
-        tmp3=psi[j]*xft
         xft3[j] = idl_ifft(fourier.ifftshift(psi[j]*xft))
 
     return xft3
@@ -152,28 +148,26 @@ def vis_wv_fiwt_inverse(x, psi):
 
     r = np.zeros((nscales, psi.shape[1], psi.shape[2]), dtype=np.complex128)
     for j in range(0, nscales):
-        tmp1 = psi[j]
-        tmp2 = x[j]
-        tmp3 = fourier.fft2(x[j])
-        tmp4 = tmp3*tmp1
         r[j] = fourier.fftshift(idl_fft(x[j]))*psi[j]
 
     return idl_ifft(fourier.ifftshift(r.sum(0))) #possible bug: wrong dimension to sum over
 
 
-
-
-def vis_wv(vis, imsize, NSCALES=3):
+def vis_wv(dirty_map, psf_map, imsize, niter, NSCALES=3):
     lamb = 0.05
     psi = vis_wv_fiwt_spectra(imsize[0], NSCALES)
     dc = (dirty_map * (dirty_map > 0)).sum()/dirty_map.size
+    dc= 80000
 
     B = dirty_map * (dc / dirty_map.sum())
     P = psf_map / psf_map.sum()
 
+
     Btrans= idl_fft(B)
     center = imsize[0]/2
-    P = idl_fft(np.transpose(np.roll(np.transpose(P), 1 - center)))*P.size #possible bug
+    trouble = np.transpose(np.roll(np.transpose(P), 1 - center))
+    trouble = np.transpose(P)
+    P = idl_fft(trouble)*P.size #possible bug
     L = 2 * np.max(abs(P) ** 2)
 
     #init
@@ -182,14 +176,13 @@ def vis_wv(vis, imsize, NSCALES=3):
     Y = X_iter
     t_new = 1
 
-    for i in range(0, 1):
+    for i in range(0, 50):
         X_old = X_iter
         t_old = t_new
 
         #gradient step
         D = P * idl_fft(Y) - Btrans
-        Y = Y -2.0/L * idl_fft(np.conj(P)*D)
-
+        Y = Y# -2.0/L * idl_ifft(np.conj(P)*D)
         WY = vis_wv_fiwt(np.real(Y), psi)
 
         #soft thresholding
@@ -219,12 +212,33 @@ def vis_wv(vis, imsize, NSCALES=3):
 
     return np.real(X_iter * (X_iter > 0))
 
-imsize = (17, 17)
-output = vis_wv(0, imsize, NSCALES=3)
+
+folder = "./img/54x54pixels/"
+image_dimensions = (54, 54)
+
+dirty_api = _casac.image()
+dirty_image = dirty_api.newimage(infile=folder+"test.residual")
+dirty_map = np.reshape(dirty_image.getchunk(), image_dimensions)[0:53, 0:53]
+psf_api = _casac.image()
+psf_image = psf_api.newimage(infile=folder+"test.psf")
+psf_map = np.reshape(psf_image.getchunk(), image_dimensions)[0:53, 0:53]
+
+np.savetxt("img.csv", dirty_map, delimiter=",")
+np.savetxt("psf.csv", psf_map, delimiter=",")
+
+image_dimensions = (53, 53)
+output = vis_wv(dirty_map, psf_map, image_dimensions, 50, NSCALES=3)
+
+#output = np.transpose(np.genfromtxt('bla.txt', delimiter=','))
+#image_dimensions_new=(54, 54)
+#tmp = np.zeros(image_dimensions_new)
+#tmp[0:53, 0:53] = output
+#output = tmp
+
 
 out_api = _casac.image()
-out_image = out_api.newimage(infile="./img/17x17pixels/test.output")
-out_reshaped = np.reshape(output, (17, 17, 1, 1))
+out_image = out_api.newimage(infile=folder+"test.output")
+out_reshaped = np.reshape(output, (54, 54, 1, 1))
 out_image.putchunk(out_reshaped)
 out_image.close()
 
