@@ -1,4 +1,3 @@
-
 import sys
 import os
 import numpy as np
@@ -10,17 +9,7 @@ os.environ["CASAPATH"]="/home/jon/casa-src/casa linux"
 
 from casac import casac as _casac
 
-
-
-
-
-
-
-
-
-
 #spectra helper methods
-#!!!!!! Less than and greater than may be reversed!!!
 def vis_wv_meyeraux(x):
     y = 35 * (x**4) - 84 * (x**5) + 70 * (x**6) - 20 * (x**7)
     return y*(x >= 0)*(x <= 1) + (x > 1)
@@ -230,10 +219,10 @@ image_dimensions = (53, 53)
 output = vis_wv(dirty_map, psf_map, image_dimensions, 50, NSCALES=3)
 
 #output = np.transpose(np.genfromtxt('bla.txt', delimiter=','))
-#image_dimensions_new=(54, 54)
-#tmp = np.zeros(image_dimensions_new)
-#tmp[0:53, 0:53] = output
-#output = tmp
+image_dimensions_new=(54, 54)
+tmp = np.zeros(image_dimensions_new)
+tmp[0:53, 0:53] = output
+output = tmp
 
 
 out_api = _casac.image()
