@@ -51,6 +51,12 @@ def vis_wv_repmat(M0, nc, nr):
     ndims = len(M.shape)
     sm = M.shape
 
+    if nc > nr:
+        M1 = np.repeat(M0,n,axis=0)
+    else:
+        M1 = np.repeat(M0,n, axis=1)
+    return M1
+
     mx = 1
     my = 1
     if ndims == 1:

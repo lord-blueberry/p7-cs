@@ -47,5 +47,5 @@ def createTestImage():
 
 create_csv()
 
-createTestImage()
+#createTestImage()
 #
