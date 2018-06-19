@@ -1,0 +1,10 @@
+--- tasks.py	2018-06-19 05:31:07.699757452 -0400
++++ tasks_new.py	2018-06-19 05:35:05.527655404 -0400
+@@ -117,6 +117,7 @@
+ from statwt2_cli import  statwt2_cli as statwt2
+ from tclean_cli import  tclean_cli as tclean
+ from tclean2_cli import  tclean2_cli as tclean2
++from p7_cs_cli import  p7_cs_cli as p7_cs
+ from testconcat_cli import  testconcat_cli as testconcat
+ from uvcontsub_cli import  uvcontsub_cli as uvcontsub
+ from uvcontsub3_cli import  uvcontsub3_cli as uvcontsub3
