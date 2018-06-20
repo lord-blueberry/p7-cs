@@ -6,21 +6,24 @@
 import sys
 import os
 # from casac import *
-import casac
+from casac import casac as _casac
 import string
 import time
 import inspect
 import gc
-import numpy
+import math
 from casa_stack_manip import stack_frame_find
 from odict import odict
 from types import *
+from shutil import copyfile
 
 from task_tclean import tclean
 
+import numpy as np
+from gurobipy import *
+
 from imagerhelpers.imager_base import PySynthesisImager
 from imagerhelpers.input_parameters import ImagerParameters
-
 
 
 class p7_cs_cli_:
@@ -28,11 +31,156 @@ class p7_cs_cli_:
     rkey = None
     i_am_a_casapy_task = None
 
+    def read_image(self, imagename, dimensions):
+        img = _casac.image()
+        dirty = img.newimage(infile=imagename)
+        map = np.reshape(dirty.getchunk(), dimensions)[0:dimensions[0], 0:dimensions[1]]
+        dirty.close()
+        return map
+
+    def write_image(self, imagename, content, dimensions):
+        img = _casac.image()
+        dirty = img.newimage(infile=imagename)
+        out_reshaped = np.reshape(content, (dimensions[0], dimensions[1], 1, 1))
+        dirty.putchunk(out_reshaped)
+        dirty.close()
+
+    def starlet(self, dirty_map, psf_map, lambda_cs, starlet_levels):
+        casalog = self.__globals__['casalog']
+        def calcSpline():
+            b3spline = np.asarray([1 / 16, 1 / 4, 3 / 8, 1 / 4, 1 / 16])
+            row = np.asmatrix([b3spline])
+            return (np.dot(np.transpose(row), row))
+
+        def calcConvMatrix(size, kernel, J):
+            output = np.zeros((size[0] * size[1], size[0] * size[1]))
+            kernel = np.fliplr(np.flipud(kernel))
+
+            disp = 2 ** J
+            mid = kernel.shape[0] // 2
+            for x in range(0, size[0]):
+                offset = x * size[0]
+                for y in range(0, size[1]):
+                    temp = np.reshape(output[offset + y], size)
+                    for i in range(0, kernel.shape[0]):
+                        for j in range(0, kernel.shape[1]):
+                            xi = ((i - mid) * disp + x)
+                            yi = ((j - mid) * disp + y)
+                            # print(xi, yi)
+                            mx = xi // size[0] % 2
+                            xi = xi % size[0]
+                            if mx == 1:
+                                xi = size[0] - 1 - xi
+
+                            my = yi // size[1] % 2
+                            yi = yi % size[1]
+                            if my == 1:
+                                yi = size[1] - 1 - yi
+                            # print(mx, my, xi, yi)
+                            temp[xi, yi] += kernel[i, j]
+            return (output)
+
+        psf = psf_map.copy()
+        psf[np.absolute(psf) < 0.02] = 0  # clip negative psf values
+        print("psf filled to ", np.count_nonzero(psf) / psf.size * 100, "%")
+        lo = int(math.ceil(psf.shape[0] / 4))
+        hi = psf.shape[0] - int(math.floor(psf.shape[0] / 4))
+        # psf= psf[lo:hi,lo:hi] #reduce psf size
+        psf = np.fliplr(np.flipud(psf))
+
+        model = Model("starlet regularizer")
+        model.Params.method = 0  # GRB Primal Simplex
+        psf_sum = model.addVars(dirty_map.shape[0], dirty_map.shape[1], lb=-GRB.INFINITY)
+        pixel_flat = []
+        pixelArr = []
+        for x in range(0, dirty_map.shape[0]):
+            row = []
+            for y in range(0, dirty_map.shape[1]):
+                v = model.addVar()
+                row.append(v)
+                pixel_flat.append(v)
+            pixelArr.append(row)
+
+        XCenter = int(math.floor((psf.shape[0] - 1) / 2))
+        YCenter = int(math.floor((psf.shape[1] - 1) / 2))
+        print(psf[XCenter, YCenter])
+        start_time = time.time()
+        for x in range(0, dirty_map.shape[0]):
+            psfX0 = -min(x - XCenter, 0)
+            psfX1 = min(psf.shape[0] - 1, XCenter + (dirty_map.shape[0] - 1 - x))
+            X0 = max(x - XCenter, 0)
+            for y in range(0, dirty_map.shape[1]):
+                Y0 = max(y - YCenter, 0)
+                Y1 = min(y + (psf.shape[1] - YCenter - 1), dirty_map.shape[1] - 1)
+                psfY0 = -min(y - YCenter, 0)
+                psfY1 = min(psf.shape[1] - 1, YCenter + (dirty_map.shape[1] - 1 - y))
+
+                # print(x, psfX0, psfX1)
+                convolution = LinExpr()
+                for xp in range(0, psfX1 - psfX0 + 1):
+                    psf_cut = psf[xp + psfX0, psfY0:psfY1 + 1]
+                    pixel_cut = pixelArr[X0 + xp][Y0:Y1 + 1]
+                    convolution.addTerms(psf_cut, pixel_cut)
+                model.addConstr(psf_sum[x, y] == dirty_map[x, y] - convolution, "conv")
+        elapsed_time = time.time() - start_time
+        casalog.post("done psf modelling "+ str(elapsed_time))
+
+        start_time = time.time()
+        star_c = []
+        star_w = []
+        star_w_abs = []
+        b3spline = calcSpline()
+        for J in range(0, starlet_levels):
+            star_cJ = model.addVars(dirty_map.size, lb=-GRB.INFINITY)
+            star_wJ = model.addVars(dirty_map.size, lb=-GRB.INFINITY)
+            star_wJ_abs = model.addVars(dirty_map.size, lb=-GRB.INFINITY)
+
+            star_c.append(star_cJ)
+            star_w.append(star_wJ)
+            star_w_abs.append(star_wJ_abs)
+
+            star_c0 = 0
+            if J == 0:
+                star_c0 = pixel_flat
+            else:
+                star_c0 = star_c[J - 1]
+            print("J ", J)
+            MJ = calcConvMatrix(dirty_map.shape, b3spline, J)
+            for x in range(0, dirty_map.size):
+                reg = LinExpr()
+                reg.addTerms(MJ[x], pixel_flat)
+                model.addConstr(star_cJ[x] == reg)
+                model.addConstr(star_wJ[x] == star_c0[x] - star_cJ[x])
+                model.addGenConstrAbs(star_wJ_abs[x], star_wJ[x])
+        elapsed_time = time.time() - start_time
+        casalog.post("done starlet modelling " + str(elapsed_time))
+
+        objective = QuadExpr()
+        for x in range(0, dirty_map.shape[0]):
+            for y in range(0, dirty_map.shape[1]):
+                # L2[Dirty - X * PSF]
+                objective += psf_sum[x, y] * psf_sum[x, y]
+
+        lamb = lambda_cs / starlet_levels
+        for J in range(0, starlet_levels):
+            star_wJ_abs = star_w_abs[J]
+            for x in range(0, dirty_map.size):
+                objective += lamb * star_wJ_abs[x]
+
+        model.setObjective(objective, GRB.MINIMIZE)
+        model.optimize()
+
+        results_starlet = np.zeros((dirty_map.shape[0], dirty_map.shape[1]))
+        for x in range(0, dirty_map.shape[0]):
+            for y in range(0, dirty_map.shape[0]):
+                results_starlet[x, y] = pixelArr[x][y].x
+
+        return(results_starlet)
+
     # The existence of the i_am_a_casapy_task attribute allows help()
     # (and other) to treat casapy tasks as a special case.
-
     def __init__(self):
-        self.__bases__ = (tclean_cli_,)
+        self.__bases__ = (p7_cs_cli_,)
         self.__doc__ = self.__call__.__doc__
 
         self.parameters = {'vis': None, 'selectdata': None, 'field': None, 'spw': None, 'timerange': None,
@@ -53,8 +201,8 @@ class p7_cs_cli_:
                            'negativethreshold': None, 'smoothfactor': None, 'minbeamfrac': None, 'cutthreshold': None,
                            'growiterations': None, 'restart': None, 'savemodel': None, 'calcres': None, 'calcpsf': None,
                            'parallel': None,
-                           'lambda':None,
-                           'cs-alg':None,}
+                           'lambda_cs':None,
+                           'cs_alg':None,}
 
     def result(self, key=None):
         #### and add any that have completed...
@@ -72,8 +220,11 @@ class p7_cs_cli_:
                  minpsffraction=None, maxpsffraction=None, interactive=None, usemask=None, mask=None, pbmask=None,
                  maskthreshold=None, maskresolution=None, nmask=None, sidelobethreshold=None, noisethreshold=None,
                  lownoisethreshold=None, negativethreshold=None, smoothfactor=None, minbeamfrac=None, cutthreshold=None,
-                 growiterations=None, restart=None, savemodel=None, calcres=None, calcpsf=None, parallel=None, ):
+                 growiterations=None, restart=None, savemodel=None, calcres=None, calcpsf=None, parallel=None,
+                 lambda_cs=None,
+                 cs_alg=None):
 
+        niter=0 #always zero, we don't want clean to run. we just need the methods to generate the necessary files.
 
         if not hasattr(self, "__globals__") or self.__globals__ == None:
             self.__globals__ = stack_frame_find()
@@ -81,11 +232,10 @@ class p7_cs_cli_:
         casalog = self.__globals__['casalog']
         casa = self.__globals__['casa']
         # casalog = casac.casac.logsink()
-        self.__globals__['__last_task'] = 'tclean'
-        self.__globals__['taskname'] = 'tclean'
+        self.__globals__['__last_task'] = 'p7_cs'
+        self.__globals__['taskname'] = 'p7_cs'
         ###
-        self.__globals__['update_params'](func=self.__globals__['taskname'], printtext=False,
-                                          ipython_globals=self.__globals__)
+        #self.__globals__['update_params'](func=self.__globals__['taskname'], printtext=False, ipython_globals=self.__globals__)
         ###
         ###
         # Handle globals or user over-ride of arguments
@@ -336,7 +486,9 @@ class p7_cs_cli_:
             else:
                 casalog.post(scriptstr[1][1:] + '\n', 'INFO')
 
-            #tadaa
+            dimensions = (int(imsize[0]), int(imsize[1]))
+            print(str(dimensions))
+
             imager = PySynthesisImager(params=paramList)
             imager.initializeImagers()
             imager.initializeNormalizers()
@@ -349,14 +501,24 @@ class p7_cs_cli_:
             imager.makePB()
 
             imager.runMajorCycle()
-            imager.updateMask()
+            # important magic. otherwise the imager crashes.
+            isit = imager.hasConverged()
+            imager.runMinorCycle()
 
             #
+            dirty_map = self.read_image(imagename+".residual", dimensions)
+            psf_map = self.read_image(imagename + ".psf", dimensions)
+            print(dirty_map)
 
+            starlet_levels = 3
+            #starlet_levels = int(math.log(dirty_map.shape[0], 2))
 
+            model_map = self.starlet(dirty_map, psf_map, lambda_cs, starlet_levels)
+            self.write_image(imagename+".model",model_map, dimensions)
 
-            #imager.restoreImages()
+            imager.runMajorCycle()
 
+            imager.restoreImages()
             imager.deleteTools()
 
             casalog.post('##### End Task: ' + tname + '  ' + spaces + ' #####' +
@@ -374,6 +536,7 @@ class p7_cs_cli_:
 
         gc.collect()
         return result
+
 
     #
     #
@@ -435,8 +598,8 @@ class p7_cs_cli_:
         a['calcpsf'] = True
         a['parallel'] = False
 
-        a['lambda'] = 0.05
-        a['cs-alg'] = "starlet"
+        a['lambda_cs'] = 0.05
+        a['cs_alg'] = "starlet"
 
         a['selectdata'] = {
             0: odict([{'value': True}, {'field': ""}, {'spw': ""}, {'timerange': ""}, {'uvrange': ""}, {'antenna': ""},
@@ -641,8 +804,8 @@ class p7_cs_cli_:
                 'calcpsf': 'Calculate PSF',
                 'parallel': 'Run major cycles in parallel',
 
-                'lambda' : 'compressed sensing regularization parameter',
-                'cs-alg' : "setting compressed sensing algorithm",
+                'lambda_cs': 'compressed sensing regularization parameter',
+                'cs_alg': "setting compressed sensing algorithm",
                 }
 
         #
@@ -735,8 +898,8 @@ class p7_cs_cli_:
         a['calcpsf'] = True
         a['parallel'] = False
 
-        a['lambda'] = 0.05
-        a['cs-alg'] = "starlet"
+        a['lambda_cs'] = 0.05
+        a['cs_alg'] = "starlet"
 
         # a = sys._getframe(len(inspect.stack())-1).f_globals
 
