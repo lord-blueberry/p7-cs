@@ -12,6 +12,8 @@ import time
 import inspect
 import gc
 import math
+import os
+import shutil
 from casa_stack_manip import stack_frame_find
 from odict import odict
 from types import *
@@ -26,10 +28,24 @@ from imagerhelpers.imager_base import PySynthesisImager
 from imagerhelpers.input_parameters import ImagerParameters
 
 
+
 class p7_cs_cli_:
     __name__ = "p7_cs"
     rkey = None
     i_am_a_casapy_task = None
+
+    @staticmethod
+    def copytree(src, dst, symlinks=False, ignore=None):
+        if not os.path.exists(dst):
+            os.makedirs(dst)
+        for item in os.listdir(src):
+            s = os.path.join(src, item)
+            d = os.path.join(dst, item)
+            if os.path.isdir(s):
+                copytree(s, d, symlinks, ignore)
+            else:
+                if not os.path.exists(d) or os.stat(s).st_mtime - os.stat(d).st_mtime > 1:
+                    shutil.copy2(s, d)
 
     def read_image(self, imagename, dimensions):
         img = _casac.image()
@@ -45,47 +61,16 @@ class p7_cs_cli_:
         dirty.putchunk(out_reshaped)
         dirty.close()
 
-    def starlet(self, dirty_map, psf_map, lambda_cs, starlet_levels):
-        casalog = self.__globals__['casalog']
-        def calcSpline():
-            b3spline = np.asarray([1 / 16, 1 / 4, 3 / 8, 1 / 4, 1 / 16])
-            row = np.asmatrix([b3spline])
-            return (np.dot(np.transpose(row), row))
-
-        def calcConvMatrix(size, kernel, J):
-            output = np.zeros((size[0] * size[1], size[0] * size[1]))
-            kernel = np.fliplr(np.flipud(kernel))
-
-            disp = 2 ** J
-            mid = kernel.shape[0] // 2
-            for x in range(0, size[0]):
-                offset = x * size[0]
-                for y in range(0, size[1]):
-                    temp = np.reshape(output[offset + y], size)
-                    for i in range(0, kernel.shape[0]):
-                        for j in range(0, kernel.shape[1]):
-                            xi = ((i - mid) * disp + x)
-                            yi = ((j - mid) * disp + y)
-                            # print(xi, yi)
-                            mx = xi // size[0] % 2
-                            xi = xi % size[0]
-                            if mx == 1:
-                                xi = size[0] - 1 - xi
-
-                            my = yi // size[1] % 2
-                            yi = yi % size[1]
-                            if my == 1:
-                                yi = size[1] - 1 - yi
-                            # print(mx, my, xi, yi)
-                            temp[xi, yi] += kernel[i, j]
-            return (output)
-
+    def model_psf(self, dirty_map, psf_map, psf_threshold, cut_psf=False):
         psf = psf_map.copy()
-        psf[np.absolute(psf) < 0.02] = 0  # clip negative psf values
-        print("psf filled to ", np.count_nonzero(psf) / psf.size * 100, "%")
+        psf[np.absolute(psf) < float(psf_threshold)] = 0  # clip negative psf values
+
+        print("psf filled to " + str(float(np.count_nonzero(psf)) / psf.size * 100.0) + "%")
+
         lo = int(math.ceil(psf.shape[0] / 4))
         hi = psf.shape[0] - int(math.floor(psf.shape[0] / 4))
-        # psf= psf[lo:hi,lo:hi] #reduce psf size
+        if cut_psf:
+            psf= psf[lo:hi,lo:hi] #reduce psf size
         psf = np.fliplr(np.flipud(psf))
 
         model = Model("starlet regularizer")
@@ -123,7 +108,219 @@ class p7_cs_cli_:
                     convolution.addTerms(psf_cut, pixel_cut)
                 model.addConstr(psf_sum[x, y] == dirty_map[x, y] - convolution, "conv")
         elapsed_time = time.time() - start_time
-        casalog.post("done psf modelling "+ str(elapsed_time))
+        print("done psf modelling " + str(elapsed_time))
+
+        return model, psf_sum, pixelArr, pixel_flat
+
+    def solve_objective_clean(self, dirty_map, psf_map, psf_threshold):
+        model, psf_sum, pixelArr, pixel_flat = self.model_psf(dirty_map, psf_map, psf_threshold)
+
+        objective = QuadExpr()
+        for x in range(0, dirty_map.shape[0]):
+            for y in range(0, dirty_map.shape[1]):
+                # L2[Dirty - X * PSF]
+                objective += psf_sum[x, y] * psf_sum[x, y]
+
+        model.setObjective(objective, GRB.MINIMIZE)
+        model.optimize()
+
+        results = np.zeros((dirty_map.shape[0], dirty_map.shape[1]))
+        for x in range(0, dirty_map.shape[0]):
+            for y in range(0, dirty_map.shape[0]):
+                results[x, y] = pixelArr[x][y].x
+
+        return results
+
+    def solve_objective_l1(self, dirty_map, psf_map, psf_threshold, lambda_cs):
+        model, psf_sum, pixelArr, pixel_flat = self.model_psf(dirty_map, psf_map, psf_threshold)
+
+        abs_pixels = model.addVars(dirty_map.shape[0], dirty_map.shape[1])
+        for x in range(0, dirty_map.shape[0]):
+            for y in range(dirty_map.shape[1]):
+                model.addGenConstrAbs(abs_pixels[x,y], pixelArr[x][y])
+
+        objective = QuadExpr()
+        for x in range(0, dirty_map.shape[0]):
+            for y in range(0, dirty_map.shape[1]):
+                # L2[Dirty - X * PSF]
+                objective += psf_sum[x, y] * psf_sum[x, y]
+
+        for x in range(0, dirty_map.shape[0]):
+            for y in range(dirty_map.shape[1]):
+                objective += lambda_cs * abs_pixels[x,y]
+
+        model.setObjective(objective, GRB.MINIMIZE)
+        model.optimize()
+
+        results = np.zeros((dirty_map.shape[0], dirty_map.shape[1]))
+        for x in range(0, dirty_map.shape[0]):
+            for y in range(0, dirty_map.shape[0]):
+                results[x, y] = pixelArr[x][y].x
+
+        return results
+
+    def solve_objective_l2(self, dirty_map, psf_map, psf_threshold, lambda_cs):
+        model, psf_sum, pixelArr, pixel_flat = self.model_psf(dirty_map, psf_map, psf_threshold)
+
+        objective = QuadExpr()
+        for x in range(0, dirty_map.shape[0]):
+            for y in range(0, dirty_map.shape[1]):
+                # L2[Dirty - X * PSF]
+                objective += psf_sum[x, y] * psf_sum[x, y]
+
+        for x in range(0, dirty_map.shape[0]):
+            for y in range(dirty_map.shape[1]):
+                objective += lambda_cs * pixelArr[x][y] * pixelArr[x][y]
+
+        model.setObjective(objective, GRB.MINIMIZE)
+        model.optimize()
+
+        results = np.zeros((dirty_map.shape[0], dirty_map.shape[1]))
+        for x in range(0, dirty_map.shape[0]):
+            for y in range(0, dirty_map.shape[0]):
+                results[x, y] = pixelArr[x][y].x
+
+        return results
+
+    def solve_objective_tv(self, dirty_map, psf_map, psf_threshold, lambda_cs):
+        model, psf_sum, pixelArr, pixel_flat = self.model_psf(dirty_map, psf_map, psf_threshold)
+
+        pixel_x_div = model.addVars(dirty_map.shape[0] - 1, dirty_map.shape[1] - 1, lb=-GRB.INFINITY)
+        pixel_x_div_abs = model.addVars(dirty_map.shape[0] - 1, dirty_map.shape[1] - 1, lb=-GRB.INFINITY)
+        pixel_y_div = model.addVars(dirty_map.shape[0] - 1, dirty_map.shape[1] - 1, lb=-GRB.INFINITY)
+        pixel_y_div_abs = model.addVars(dirty_map.shape[0] - 1, dirty_map.shape[1] - 1, lb=-GRB.INFINITY)
+        for x in range(0, dirty_map.shape[0] - 1):
+            for y in range(0, dirty_map.shape[1] - 1):
+                model.addConstr(pixel_x_div[x, y] == pixelArr[x + 1][y] - pixelArr[x][y])
+                model.addGenConstrAbs(pixel_x_div_abs[x, y], pixel_x_div[x, y])
+
+                model.addConstr(pixel_y_div[x, y] == pixelArr[x][y + 1] - pixelArr[x][y])
+                model.addGenConstrAbs(pixel_y_div_abs[x, y], pixel_y_div[x, y])
+
+        objective = QuadExpr()
+        for x in range(0, dirty_map.shape[0]):
+            for y in range(0, dirty_map.shape[1]):
+                # L2[Dirty - X * PSF]
+                objective += psf_sum[x, y] * psf_sum[x, y]
+
+        for x in range(0, dirty_map.shape[0] - 1):
+            for y in range(0, dirty_map.shape[1] - 1):
+                objective += lambda_cs * (pixel_x_div_abs[x, y] + pixel_y_div_abs[x, y])
+
+        model.setObjective(objective, GRB.MINIMIZE)
+        model.optimize()
+
+        results = np.zeros((dirty_map.shape[0], dirty_map.shape[1]))
+        for x in range(0, dirty_map.shape[0]):
+            for y in range(0, dirty_map.shape[0]):
+                results[x, y] = pixelArr[x][y].x
+
+        return results
+
+    def solve_objective_haar(self, dirty_map, psf_map, psf_threshold, lambda_cs):
+        dimensions = dirty_map.size
+        haar2d = np.zeros((dimensions, dimensions))
+        norm = np.zeros(dimensions)
+        haar2d[0] = 1
+        norm[0] = dimensions
+        dim = np.zeros(dirty_map.shape)
+        def haar_insert(A, norm, x0, y0, x1, y1, k):
+            xmid = int((x0 + x1) / 2)
+            ymid = int((y0 + y1) / 2)
+
+            dim[x0:xmid, y0:y1] = 1
+            dim[xmid:x1, y0:y1] = -1
+            haar2d[k] = dim.flatten()
+            norm[k] = np.absolute(dim).sum()
+            k += 1
+            dim[x0:xmid, ymid:y1] = -1
+            dim[xmid:x1, ymid:y1] = 1
+            haar2d[k] = dim.flatten()
+            norm[k] = np.absolute(dim).sum()
+            k += 1
+            dim[xmid:x1, y0:ymid] = 1
+            dim[xmid:x1, ymid:y1] = -1
+            haar2d[k] = dim.flatten()
+            norm[k] = np.absolute(dim).sum()
+            k += 1
+
+            dim[x0:x1, y0:y1] = 0
+            if x1 - x0 > 2 and y1 - y0 > 2:
+                k = haar_insert(A, norm, x0, y0, xmid, ymid, k)
+                k = haar_insert(A, norm, xmid, y0, x1, ymid, k)
+                k = haar_insert(A, norm, x0, ymid, xmid, y1, k)
+                k = haar_insert(A, norm, xmid, ymid, x1, y1, k)
+            return k
+        k = 1
+        haar_insert(haar2d, norm, 0, 0, dim.shape[0], dim.shape[1], k)
+        haar2d = np.transpose(1 / np.sqrt(norm) * np.transpose(haar2d))
+
+
+        model, psf_sum, pixelArr, pixel_flat = self.model_psf(dirty_map, psf_map, psf_threshold)
+
+        haar_var = model.addVars(dirty_map.size, lb=-GRB.INFINITY)
+        haar_var_abs = model.addVars(dirty_map.size, lb=-GRB.INFINITY)
+        start_time = time.time()
+        for x in range(0, dirty_map.size):
+            reg = LinExpr()
+            reg.addTerms(haar2d[x], pixel_flat)
+            model.addConstr(haar_var[x] == reg)
+            model.addGenConstrAbs(haar_var_abs[x], haar_var[x])
+        elapsed_time = time.time() - start_time
+        print("done regularizer ", elapsed_time)
+
+        objective = QuadExpr()
+        for x in range(0, dirty_map.shape[0]):
+            offset = x * dirty_map.shape[0]
+            for y in range(0, dirty_map.shape[1]):
+                # L2[Dirty - X * PSF]
+                objective += psf_sum[x, y] * psf_sum[x, y]
+                objective += lambda_cs * haar_var_abs[offset + y]
+
+        model.setObjective(objective, GRB.MINIMIZE)
+        model.optimize()
+
+        results_haar = np.zeros((dirty_map.shape[0], dirty_map.shape[1]))
+        for x in range(0, dirty_map.shape[0]):
+            for y in range(0, dirty_map.shape[0]):
+                results_haar[x, y] = pixelArr[x][y].x
+
+    def solve_objective_starlet(self, dirty_map, psf_map,psf_threshold, lambda_cs, starlet_levels):
+        casalog = self.__globals__['casalog']
+        def calcSpline():
+            b3spline = np.asarray([1 / 16, 1 / 4, 3 / 8, 1 / 4, 1 / 16])
+            row = np.asmatrix([b3spline])
+            return (np.dot(np.transpose(row), row))
+
+        def calcConvMatrix(size, kernel, J):
+            output = np.zeros((size[0] * size[1], size[0] * size[1]))
+            kernel = np.fliplr(np.flipud(kernel))
+
+            disp = 2 ** J
+            mid = kernel.shape[0] // 2
+            for x in range(0, size[0]):
+                offset = x * size[0]
+                for y in range(0, size[1]):
+                    temp = np.reshape(output[offset + y], size)
+                    for i in range(0, kernel.shape[0]):
+                        for j in range(0, kernel.shape[1]):
+                            xi = ((i - mid) * disp + x)
+                            yi = ((j - mid) * disp + y)
+                            # print(xi, yi)
+                            mx = xi // size[0] % 2
+                            xi = xi % size[0]
+                            if mx == 1:
+                                xi = size[0] - 1 - xi
+
+                            my = yi // size[1] % 2
+                            yi = yi % size[1]
+                            if my == 1:
+                                yi = size[1] - 1 - yi
+                            # print(mx, my, xi, yi)
+                            temp[xi, yi] += kernel[i, j]
+            return (output)
+
+        model, psf_sum, pixelArr, pixel_flat = self.model_psf(dirty_map, psf_map, psf_threshold)
 
         start_time = time.time()
         star_c = []
@@ -508,17 +705,47 @@ class p7_cs_cli_:
             #
             dirty_map = self.read_image(imagename+".residual", dimensions)
             psf_map = self.read_image(imagename + ".psf", dimensions)
-            print(dirty_map)
 
-            starlet_levels = 3
-            #starlet_levels = int(math.log(dirty_map.shape[0], 2))
+            psf_threshold = 0.02
+            starlet_levels = 1
+            if cs_alg=="positive clean":
+                print("saelecting positive clean")
+                model_map = self.solve_objective_clean(dirty_map, psf_map, psf_threshold, starlet_levels)
+            elif cs_alg == "L1":
+                print("selecting L1 regularization")
+                model_map = self.solve_objective_l1(dirty_map, psf_map, psf_threshold, lambda_cs, starlet_levels)
+            elif cs_alg == "L2":
+                print("selecting L2 regularization")
+                model_map = self.solve_objective_l2(dirty_map, psf_map, psf_threshold, lambda_cs, starlet_levels)
+            elif cs_alg == "TV":
+                print("selecting Total Variation regularization")
+                model_map = self.solve_objective_tv(dirty_map, psf_map, psf_threshold, lambda_cs, starlet_levels)
+            elif cs_alg == "haar":
+                print("selecting haar regularization")
+                model_map = self.solve_objective_haar(dirty_map, psf_map, psf_threshold, lambda_cs, starlet_levels)
+            else:
+                print("selecting starlet regularization")
+                model_map = self.solve_objective_starlet(dirty_map, psf_map, psf_threshold, lambda_cs, starlet_levels)
 
-            model_map = self.starlet(dirty_map, psf_map, lambda_cs, starlet_levels)
-            self.write_image(imagename+".model",model_map, dimensions)
+            self.write_image(imagename+".model", model_map, dimensions)
 
-            imager.runMajorCycle()
+            if cs_alg == "positive clean":
+                imager.runMajorCycle()
+                imager.restoreImages()
+            else:
+                print("copy=")
+                try:
+                    p7_cs_cli_.copytree(imagename + ".residual", imagename + ".image")
+                except Exception as inst:
+                    print(type(inst))  # the exception instance
+                    print(inst.args)  # arguments stored in .args
+                    print(inst)
+                    raise
+                print("wow")
+                residual = dirty_map - model_map
+                self.write_image(imagename+".residual", residual, dimensions)
+                self.write_image(imagename+".image", model_map + residual, dimensions)
 
-            imager.restoreImages()
             imager.deleteTools()
 
             casalog.post('##### End Task: ' + tname + '  ' + spaces + ' #####' +
