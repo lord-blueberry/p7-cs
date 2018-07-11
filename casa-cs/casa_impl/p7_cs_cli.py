@@ -112,8 +112,8 @@ class p7_cs_cli_:
 
         return model, psf_sum, pixelArr, pixel_flat
 
-    def solve_objective_clean(self, dirty_map, psf_map, psf_threshold):
-        model, psf_sum, pixelArr, pixel_flat = self.model_psf(dirty_map, psf_map, psf_threshold)
+    def solve_objective_clean(self, dirty_map, psf_map, psf_threshold, cut_psf):
+        model, psf_sum, pixelArr, pixel_flat = self.model_psf(dirty_map, psf_map, psf_threshold,cut_psf)
 
         objective = QuadExpr()
         for x in range(0, dirty_map.shape[0]):
@@ -123,15 +123,25 @@ class p7_cs_cli_:
 
         model.setObjective(objective, GRB.MINIMIZE)
         model.optimize()
+        objective_val = model.getAttr(GRB.Attr.ObjVal)
 
         results = np.zeros((dirty_map.shape[0], dirty_map.shape[1]))
         for x in range(0, dirty_map.shape[0]):
             for y in range(0, dirty_map.shape[0]):
                 results[x, y] = pixelArr[x][y].x
 
-        return results
+        return results, objective_val
 
-    def solve_objective_l1(self, dirty_map, psf_map, psf_threshold, lambda_cs):
+    def solve_objective_l1(self, dirty_map, psf_map, psf_threshold, cut_psf, lambda_cs, lambda_estimate=None):
+        if lambda_estimate:
+            e = np.loadtxt(lambda_estimate[0], delimiter=',')
+            model_map = np.loadtxt(lambda_estimate[1], delimited=',')
+            E = np.sum(np.absolute(np.square(model_map)))
+            lambda_cs = e / E
+            print("Miller lambda estimation e/E = " + str(lambda_cs))
+            print("e: "+str(e))
+            print("E: " + str(E))
+
         model, psf_sum, pixelArr, pixel_flat = self.model_psf(dirty_map, psf_map, psf_threshold)
 
         abs_pixels = model.addVars(dirty_map.shape[0], dirty_map.shape[1])
@@ -159,8 +169,15 @@ class p7_cs_cli_:
 
         return results
 
-    def solve_objective_l2(self, dirty_map, psf_map, psf_threshold, lambda_cs):
-        model, psf_sum, pixelArr, pixel_flat = self.model_psf(dirty_map, psf_map, psf_threshold)
+    def solve_objective_l2(self, dirty_map, psf_map, psf_threshold, cut_psf,lambda_cs,  lambda_estimate=None):
+        if lambda_estimate:
+            e = np.loadtxt(lambda_estimate[0], delimiter=',')
+            model_map = np.loadtxt(lambda_estimate[1], delimited=',')
+            E = np.sum(np.absolute(np.square(model_map)))
+            lambda_cs = e / E
+            print("Miller lambda estimation " + lambda_cs)
+
+        model, psf_sum, pixelArr, pixel_flat = self.model_psf(dirty_map, psf_map, psf_threshold, cut_psf)
 
         objective = QuadExpr()
         for x in range(0, dirty_map.shape[0]):
@@ -175,6 +192,7 @@ class p7_cs_cli_:
         model.setObjective(objective, GRB.MINIMIZE)
         model.optimize()
 
+
         results = np.zeros((dirty_map.shape[0], dirty_map.shape[1]))
         for x in range(0, dirty_map.shape[0]):
             for y in range(0, dirty_map.shape[0]):
@@ -182,8 +200,19 @@ class p7_cs_cli_:
 
         return results
 
-    def solve_objective_tv(self, dirty_map, psf_map, psf_threshold, lambda_cs):
-        model, psf_sum, pixelArr, pixel_flat = self.model_psf(dirty_map, psf_map, psf_threshold)
+    def solve_objective_tv(self, dirty_map, psf_map, psf_threshold, cut_psf,lambda_cs,  lambda_estimate=None):
+        if lambda_estimate:
+            e = np.loadtxt(lambda_estimate[0], delimiter=',')
+            model_map = np. loadtxt(lambda_estimate[1], delimited=',')
+            E = 0
+            for x in range(0, dirty_map.shape[0]-1):
+                E =  E + np.sum(np.absolute(model_map[x+1] - model_map[x]))
+            for y in range(0, dirty_map.shape[1]-1):
+                E =  E + np.sum(np.absolute(model_map[:,y+1] - model_map[:,y]))
+            lambda_cs = e / E
+            print("Miller lambda estimation " + lambda_cs)
+
+        model, psf_sum, pixelArr, pixel_flat = self.model_psf(dirty_map, psf_map, psf_threshold,cut_psf)
 
         pixel_x_div = model.addVars(dirty_map.shape[0] - 1, dirty_map.shape[1] - 1, lb=-GRB.INFINITY)
         pixel_x_div_abs = model.addVars(dirty_map.shape[0] - 1, dirty_map.shape[1] - 1, lb=-GRB.INFINITY)
@@ -217,7 +246,7 @@ class p7_cs_cli_:
 
         return results
 
-    def solve_objective_haar(self, dirty_map, psf_map, psf_threshold, lambda_cs):
+    def solve_objective_haar(self, dirty_map, psf_map, psf_threshold, cut_psf, lambda_cs,  lambda_estimate=None):
         dimensions = dirty_map.size
         haar2d = np.zeros((dimensions, dimensions))
         norm = np.zeros(dimensions)
@@ -255,8 +284,17 @@ class p7_cs_cli_:
         haar_insert(haar2d, norm, 0, 0, dim.shape[0], dim.shape[1], k)
         haar2d = np.transpose(1 / np.sqrt(norm) * np.transpose(haar2d))
 
+        if lambda_estimate:
+            e = np.loadtxt(lambda_estimate[0], delimiter=',')
+            model_map = np. loadtxt(lambda_estimate[1], delimited=',')
+            E = 0
+            flatten = model_map.flatten()
+            for x in range(0, dirty_map.size):
+                E =  E +np.absolute(np.sum(np.multiply(haar2d[x],flatten)))
+            lambda_cs = e / E
+            print("Miller lambda estimation " + lambda_cs)
 
-        model, psf_sum, pixelArr, pixel_flat = self.model_psf(dirty_map, psf_map, psf_threshold)
+        model, psf_sum, pixelArr, pixel_flat = self.model_psf(dirty_map, psf_map, psf_threshold,cut_psf)
 
         haar_var = model.addVars(dirty_map.size, lb=-GRB.INFINITY)
         haar_var_abs = model.addVars(dirty_map.size, lb=-GRB.INFINITY)
@@ -284,8 +322,9 @@ class p7_cs_cli_:
         for x in range(0, dirty_map.shape[0]):
             for y in range(0, dirty_map.shape[0]):
                 results_haar[x, y] = pixelArr[x][y].x
+        return (results_haar)
 
-    def solve_objective_starlet(self, dirty_map, psf_map,psf_threshold, lambda_cs, starlet_levels):
+    def solve_objective_starlet(self, dirty_map, psf_map,psf_threshold, cut_psf, lambda_cs, starlet_levels,  lambda_estimate=None):
         casalog = self.__globals__['casalog']
         def calcSpline():
             b3spline = np.asarray([1 / 16, 1 / 4, 3 / 8, 1 / 4, 1 / 16])
@@ -320,7 +359,24 @@ class p7_cs_cli_:
                             temp[xi, yi] += kernel[i, j]
             return (output)
 
-        model, psf_sum, pixelArr, pixel_flat = self.model_psf(dirty_map, psf_map, psf_threshold)
+        if lambda_estimate:
+            e = np.loadtxt(lambda_estimate[0], delimiter=',')
+            model_map = np. loadtxt(lambda_estimate[1], delimited=',')
+            E = 0
+            b3spline = calcSpline()
+            star_c0 = model_map.flatten()
+            star_cj = 0
+            for J in range(0, starlet_levels):
+                MJ = calcConvMatrix(dirty_map.shape, b3spline, J)
+                star_cj = np.dot(MJ, star_c0)
+                star_wj = star_c0 - star_cj
+                star_c0 = star_cj
+                E = E + np.sum(np.absolute(star_wj))
+            E = E + np.sum(np.absolute(star_c0))
+            lambda_cs = e / E
+            print("Miller lambda estimation "+ lambda_cs)
+
+        model, psf_sum, pixelArr, pixel_flat = self.model_psf(dirty_map, psf_map, psf_threshold,cut_psf)
 
         start_time = time.time()
         star_c = []
@@ -358,7 +414,7 @@ class p7_cs_cli_:
                 # L2[Dirty - X * PSF]
                 objective += psf_sum[x, y] * psf_sum[x, y]
 
-        lamb = lambda_cs / starlet_levels
+        lamb = lambda_cs
         for J in range(0, starlet_levels):
             star_wJ_abs = star_w_abs[J]
             for x in range(0, dirty_map.size):
@@ -398,8 +454,7 @@ class p7_cs_cli_:
                            'negativethreshold': None, 'smoothfactor': None, 'minbeamfrac': None, 'cutthreshold': None,
                            'growiterations': None, 'restart': None, 'savemodel': None, 'calcres': None, 'calcpsf': None,
                            'parallel': None,
-                           'lambda_cs':None,
-                           'cs_alg':None,}
+                           'lambda_cs':None,'cs_alg':None,'psf_threshold':None, 'psf_cutoff':None}
 
     def result(self, key=None):
         #### and add any that have completed...
@@ -418,8 +473,7 @@ class p7_cs_cli_:
                  maskthreshold=None, maskresolution=None, nmask=None, sidelobethreshold=None, noisethreshold=None,
                  lownoisethreshold=None, negativethreshold=None, smoothfactor=None, minbeamfrac=None, cutthreshold=None,
                  growiterations=None, restart=None, savemodel=None, calcres=None, calcpsf=None, parallel=None,
-                 lambda_cs=None,
-                 cs_alg=None):
+                 lambda_cs=None, cs_alg=None, psf_threshold=None, psf_cutoff=None, lambda_estimate=None):
 
         niter=0 #always zero, we don't want clean to run. we just need the methods to generate the necessary files.
 
@@ -706,34 +760,38 @@ class p7_cs_cli_:
             dirty_map = self.read_image(imagename+".residual", dimensions)
             psf_map = self.read_image(imagename + ".psf", dimensions)
 
-            psf_threshold = 0.02
+
+
             starlet_levels = 1
-            if cs_alg=="positive clean":
-                print("saelecting positive clean")
-                model_map = self.solve_objective_clean(dirty_map, psf_map, psf_threshold, starlet_levels)
+            if cs_alg=="positive_deconv":
+                print("selecting positive deconvolution")
+                model_map, objective_val = self.solve_objective_clean(dirty_map, psf_map, psf_threshold, psf_cutoff)
+                np.savetxt(imagename+"_objectiveVal.csv", objective_val, delimiter=',')
+                np.savetxt(imagename + "_solution.csv", model_map, delimiter=',')
             elif cs_alg == "L1":
                 print("selecting L1 regularization")
-                model_map = self.solve_objective_l1(dirty_map, psf_map, psf_threshold, lambda_cs, starlet_levels)
+                model_map = self.solve_objective_l1(dirty_map, psf_map, psf_threshold, psf_cutoff, lambda_cs, lambda_estimate)
             elif cs_alg == "L2":
                 print("selecting L2 regularization")
-                model_map = self.solve_objective_l2(dirty_map, psf_map, psf_threshold, lambda_cs, starlet_levels)
+                model_map = self.solve_objective_l2(dirty_map, psf_map, psf_threshold, psf_cutoff, lambda_cs, lambda_estimate)
             elif cs_alg == "TV":
                 print("selecting Total Variation regularization")
-                model_map = self.solve_objective_tv(dirty_map, psf_map, psf_threshold, lambda_cs, starlet_levels)
+                model_map = self.solve_objective_tv(dirty_map, psf_map, psf_threshold, psf_cutoff, lambda_cs, lambda_estimate)
             elif cs_alg == "haar":
                 print("selecting haar regularization")
-                model_map = self.solve_objective_haar(dirty_map, psf_map, psf_threshold, lambda_cs, starlet_levels)
+                model_map = self.solve_objective_haar(dirty_map, psf_map, psf_threshold, psf_cutoff, lambda_cs, lambda_estimate)
             else:
                 print("selecting starlet regularization")
-                model_map = self.solve_objective_starlet(dirty_map, psf_map, psf_threshold, lambda_cs, starlet_levels)
+                model_map = self.solve_objective_starlet(dirty_map, psf_map, psf_threshold, psf_cutoff, lambda_cs, starlet_levels, lambda_estimate)
 
             self.write_image(imagename+".model", model_map, dimensions)
 
+            '''
             if cs_alg == "positive clean":
                 imager.runMajorCycle()
                 imager.restoreImages()
             else:
-                print("copy=")
+                print("copy")
                 try:
                     p7_cs_cli_.copytree(imagename + ".residual", imagename + ".image")
                 except Exception as inst:
@@ -745,6 +803,10 @@ class p7_cs_cli_:
                 residual = dirty_map - model_map
                 self.write_image(imagename+".residual", residual, dimensions)
                 self.write_image(imagename+".image", model_map + residual, dimensions)
+            '''
+
+            imager.runMajorCycle()
+            imager.restoreImages()
 
             imager.deleteTools()
 
@@ -759,7 +821,7 @@ class p7_cs_cli_:
                 # print '**** Error **** ',instance
                 tname = 'p7-cs'
                 casalog.post('An error occurred running task ' + tname + '.', 'ERROR')
-                pass
+                raise
 
         gc.collect()
         return result
@@ -1033,6 +1095,8 @@ class p7_cs_cli_:
 
                 'lambda_cs': 'compressed sensing regularization parameter',
                 'cs_alg': "setting compressed sensing algorithm",
+                'psf_threshold': "psf clip threshold. every pixel with smaller magnitude than psf_threshold will be clipped to 0",
+                'psf_cutoff': "cutting off half the psf",
                 }
 
         #
@@ -1127,6 +1191,8 @@ class p7_cs_cli_:
 
         a['lambda_cs'] = 0.05
         a['cs_alg'] = "starlet"
+        a['psf_threshold'] = 0.01
+        a['psf_cutoff'] = False
 
         # a = sys._getframe(len(inspect.stack())-1).f_globals
 
