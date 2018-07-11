@@ -124,7 +124,7 @@ class p7_cs_cli_:
         model.setObjective(objective, GRB.MINIMIZE)
         model.optimize()
         objective_val = model.getAttr(GRB.Attr.ObjVal)
-
+        print(objective_val)
         results = np.zeros((dirty_map.shape[0], dirty_map.shape[1]))
         for x in range(0, dirty_map.shape[0]):
             for y in range(0, dirty_map.shape[0]):
@@ -135,7 +135,7 @@ class p7_cs_cli_:
     def solve_objective_l1(self, dirty_map, psf_map, psf_threshold, cut_psf, lambda_cs, lambda_estimate=None):
         if lambda_estimate:
             e = np.loadtxt(lambda_estimate[0], delimiter=',')
-            model_map = np.loadtxt(lambda_estimate[1], delimited=',')
+            model_map = np.loadtxt(lambda_estimate[1], delimiter=',')
             E = np.sum(np.absolute(np.square(model_map)))
             lambda_cs = e / E
             print("Miller lambda estimation e/E = " + str(lambda_cs))
@@ -172,7 +172,7 @@ class p7_cs_cli_:
     def solve_objective_l2(self, dirty_map, psf_map, psf_threshold, cut_psf,lambda_cs,  lambda_estimate=None):
         if lambda_estimate:
             e = np.loadtxt(lambda_estimate[0], delimiter=',')
-            model_map = np.loadtxt(lambda_estimate[1], delimited=',')
+            model_map = np.loadtxt(lambda_estimate[1], delimiter=',')
             E = np.sum(np.absolute(np.square(model_map)))
             lambda_cs = e / E
             print("Miller lambda estimation " + lambda_cs)
@@ -203,7 +203,7 @@ class p7_cs_cli_:
     def solve_objective_tv(self, dirty_map, psf_map, psf_threshold, cut_psf,lambda_cs,  lambda_estimate=None):
         if lambda_estimate:
             e = np.loadtxt(lambda_estimate[0], delimiter=',')
-            model_map = np. loadtxt(lambda_estimate[1], delimited=',')
+            model_map = np. loadtxt(lambda_estimate[1], delimiter=',')
             E = 0
             for x in range(0, dirty_map.shape[0]-1):
                 E =  E + np.sum(np.absolute(model_map[x+1] - model_map[x]))
@@ -286,7 +286,7 @@ class p7_cs_cli_:
 
         if lambda_estimate:
             e = np.loadtxt(lambda_estimate[0], delimiter=',')
-            model_map = np. loadtxt(lambda_estimate[1], delimited=',')
+            model_map = np. loadtxt(lambda_estimate[1], delimiter=',')
             E = 0
             flatten = model_map.flatten()
             for x in range(0, dirty_map.size):
@@ -379,34 +379,49 @@ class p7_cs_cli_:
         model, psf_sum, pixelArr, pixel_flat = self.model_psf(dirty_map, psf_map, psf_threshold,cut_psf)
 
         start_time = time.time()
+        starlet_levels = 2
+        # starlet_levels = int(math.log(dirty_map.shape[0], 2))
         star_c = []
         star_w = []
         star_w_abs = []
         b3spline = calcSpline()
+        M_previous = 0
         for J in range(0, starlet_levels):
-            star_cJ = model.addVars(dirty_map.size, lb=-GRB.INFINITY)
-            star_wJ = model.addVars(dirty_map.size, lb=-GRB.INFINITY)
-            star_wJ_abs = model.addVars(dirty_map.size, lb=-GRB.INFINITY)
+            print("modelling starlet level " + str(J + 1) + " of " + str(starlet_levels))
 
+            star_cJ = []
+            star_wJ = []
+            star_wJ_abs = []
+            for x in range(0, dirty_map.size):
+                star_cJ.append(model.addVar(lb=-GRB.INFINITY))
+                star_wJ.append(model.addVar(lb=-GRB.INFINITY))
+                star_wJ_abs.append(model.addVar())
             star_c.append(star_cJ)
             star_w.append(star_wJ)
             star_w_abs.append(star_wJ_abs)
 
-            star_c0 = 0
+            star_cminus = 0
             if J == 0:
-                star_c0 = pixel_flat
+                star_cminus = pixel_flat
+                MJ = calcConvMatrix(dirty_map.shape, b3spline, J)
             else:
-                star_c0 = star_c[J - 1]
-            print("J ", J)
-            MJ = calcConvMatrix(dirty_map.shape, b3spline, J)
+                star_cminus = star_c[J - 1]
+                MJ = np.dot(M_previous, calcConvMatrix(dirty_map.shape, b3spline, J))
             for x in range(0, dirty_map.size):
                 reg = LinExpr()
                 reg.addTerms(MJ[x], pixel_flat)
                 model.addConstr(star_cJ[x] == reg)
-                model.addConstr(star_wJ[x] == star_c0[x] - star_cJ[x])
+                model.addConstr(star_wJ[x] == star_cminus[x] - star_cJ[x])
                 model.addGenConstrAbs(star_wJ_abs[x], star_wJ[x])
+            M_previous = MJ
+
+        star_c_abs = []
+        for x in range(0, dirty_map.size):
+            star_c_abs.append(model.addVar())
+            model.addGenConstrAbs(star_c_abs[x], star_c[J - 1][x])
+
         elapsed_time = time.time() - start_time
-        casalog.post("done starlet modelling " + str(elapsed_time))
+        print("done starlet modelling ", elapsed_time)
 
         objective = QuadExpr()
         for x in range(0, dirty_map.shape[0]):
@@ -414,11 +429,12 @@ class p7_cs_cli_:
                 # L2[Dirty - X * PSF]
                 objective += psf_sum[x, y] * psf_sum[x, y]
 
-        lamb = lambda_cs
         for J in range(0, starlet_levels):
             star_wJ_abs = star_w_abs[J]
             for x in range(0, dirty_map.size):
-                objective += lamb * star_wJ_abs[x]
+                objective += lambda_cs * star_wJ_abs[x]
+        for x in range(0, dirty_map.size):
+            objective += lambda_cs * star_c_abs[x]
 
         model.setObjective(objective, GRB.MINIMIZE)
         model.optimize()
@@ -766,7 +782,7 @@ class p7_cs_cli_:
             if cs_alg=="positive_deconv":
                 print("selecting positive deconvolution")
                 model_map, objective_val = self.solve_objective_clean(dirty_map, psf_map, psf_threshold, psf_cutoff)
-                np.savetxt(imagename+"_objectiveVal.csv", objective_val, delimiter=',')
+                np.savetxt(imagename+"_objectiveVal.csv", np.asarray(objective_val).reshape(1,), delimiter=',')
                 np.savetxt(imagename + "_solution.csv", model_map, delimiter=',')
             elif cs_alg == "L1":
                 print("selecting L1 regularization")
