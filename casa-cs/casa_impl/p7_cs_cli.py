@@ -136,7 +136,7 @@ class p7_cs_cli_:
         if lambda_estimate:
             e = np.loadtxt(lambda_estimate[0], delimiter=',')
             model_map = np.loadtxt(lambda_estimate[1], delimiter=',')
-            E = np.sum(np.absolute(np.square(model_map)))
+            E = np.sum(np.absolute(model_map))
             lambda_cs = e / E
             print("Miller lambda estimation e/E = " + str(lambda_cs))
             print("e: "+str(e))
@@ -175,7 +175,7 @@ class p7_cs_cli_:
             model_map = np.loadtxt(lambda_estimate[1], delimiter=',')
             E = np.sum(np.absolute(np.square(model_map)))
             lambda_cs = e / E
-            print("Miller lambda estimation " + lambda_cs)
+            print("Miller lambda estimation " + str(lambda_cs))
 
         model, psf_sum, pixelArr, pixel_flat = self.model_psf(dirty_map, psf_map, psf_threshold, cut_psf)
 
@@ -209,8 +209,8 @@ class p7_cs_cli_:
                 E =  E + np.sum(np.absolute(model_map[x+1] - model_map[x]))
             for y in range(0, dirty_map.shape[1]-1):
                 E =  E + np.sum(np.absolute(model_map[:,y+1] - model_map[:,y]))
-            lambda_cs = e / E
-            print("Miller lambda estimation " + lambda_cs)
+            lambda_cs = e / E /2
+            print("Miller lambda estimation " + str(lambda_cs))
 
         model, psf_sum, pixelArr, pixel_flat = self.model_psf(dirty_map, psf_map, psf_threshold,cut_psf)
 
@@ -292,7 +292,7 @@ class p7_cs_cli_:
             for x in range(0, dirty_map.size):
                 E =  E +np.absolute(np.sum(np.multiply(haar2d[x],flatten)))
             lambda_cs = e / E
-            print("Miller lambda estimation " + lambda_cs)
+            print("Miller lambda estimation " + str(lambda_cs))
 
         model, psf_sum, pixelArr, pixel_flat = self.model_psf(dirty_map, psf_map, psf_threshold,cut_psf)
 
@@ -327,8 +327,10 @@ class p7_cs_cli_:
     def solve_objective_starlet(self, dirty_map, psf_map,psf_threshold, cut_psf, lambda_cs, starlet_levels,  lambda_estimate=None):
         casalog = self.__globals__['casalog']
         def calcSpline():
-            b3spline = np.asarray([1 / 16, 1 / 4, 3 / 8, 1 / 4, 1 / 16])
+            b3spline = np.asarray([1.0 / 16.0, 1.0 / 4.0, 3.0 / 8.0, 1.0 / 4.0, 1.0 / 16.0])
+
             row = np.asmatrix([b3spline])
+            bla = (np.dot(np.transpose(row), row))
             return (np.dot(np.transpose(row), row))
 
         def calcConvMatrix(size, kernel, J):
@@ -361,26 +363,24 @@ class p7_cs_cli_:
 
         if lambda_estimate:
             e = np.loadtxt(lambda_estimate[0], delimiter=',')
-            model_map = np. loadtxt(lambda_estimate[1], delimited=',')
+            model_map = np.loadtxt(lambda_estimate[1], delimiter=',')
             E = 0
             b3spline = calcSpline()
-            star_c0 = model_map.flatten()
+            star_c0 = model_map
             star_cj = 0
             for J in range(0, starlet_levels):
                 MJ = calcConvMatrix(dirty_map.shape, b3spline, J)
-                star_cj = np.dot(MJ, star_c0)
+                star_cj = np.reshape(np.dot(MJ, star_c0.flatten()), model_map.shape)
                 star_wj = star_c0 - star_cj
                 star_c0 = star_cj
                 E = E + np.sum(np.absolute(star_wj))
             E = E + np.sum(np.absolute(star_c0))
             lambda_cs = e / E
-            print("Miller lambda estimation "+ lambda_cs)
+            print("Miller lambda estimation "+ str(lambda_cs))
 
         model, psf_sum, pixelArr, pixel_flat = self.model_psf(dirty_map, psf_map, psf_threshold,cut_psf)
 
         start_time = time.time()
-        starlet_levels = 2
-        # starlet_levels = int(math.log(dirty_map.shape[0], 2))
         star_c = []
         star_w = []
         star_w_abs = []
@@ -399,7 +399,6 @@ class p7_cs_cli_:
             star_c.append(star_cJ)
             star_w.append(star_wJ)
             star_w_abs.append(star_wJ_abs)
-
             star_cminus = 0
             if J == 0:
                 star_cminus = pixel_flat
@@ -408,17 +407,17 @@ class p7_cs_cli_:
                 star_cminus = star_c[J - 1]
                 MJ = np.dot(M_previous, calcConvMatrix(dirty_map.shape, b3spline, J))
             for x in range(0, dirty_map.size):
+
                 reg = LinExpr()
                 reg.addTerms(MJ[x], pixel_flat)
                 model.addConstr(star_cJ[x] == reg)
                 model.addConstr(star_wJ[x] == star_cminus[x] - star_cJ[x])
                 model.addGenConstrAbs(star_wJ_abs[x], star_wJ[x])
             M_previous = MJ
-
         star_c_abs = []
         for x in range(0, dirty_map.size):
             star_c_abs.append(model.addVar())
-            model.addGenConstrAbs(star_c_abs[x], star_c[J - 1][x])
+            model.addGenConstrAbs(star_c_abs[x], star_c[starlet_levels - 1][x])
 
         elapsed_time = time.time() - start_time
         print("done starlet modelling ", elapsed_time)
@@ -489,7 +488,7 @@ class p7_cs_cli_:
                  maskthreshold=None, maskresolution=None, nmask=None, sidelobethreshold=None, noisethreshold=None,
                  lownoisethreshold=None, negativethreshold=None, smoothfactor=None, minbeamfrac=None, cutthreshold=None,
                  growiterations=None, restart=None, savemodel=None, calcres=None, calcpsf=None, parallel=None,
-                 lambda_cs=None, cs_alg=None, psf_threshold=None, psf_cutoff=None, lambda_estimate=None):
+                 lambda_cs=None, cs_alg=None, psf_threshold=None, psf_cutoff=None, starlet_levels=None,lambda_estimate=None):
 
         niter=0 #always zero, we don't want clean to run. we just need the methods to generate the necessary files.
 
@@ -778,7 +777,6 @@ class p7_cs_cli_:
 
 
 
-            starlet_levels = 1
             if cs_alg=="positive_deconv":
                 print("selecting positive deconvolution")
                 model_map, objective_val = self.solve_objective_clean(dirty_map, psf_map, psf_threshold, psf_cutoff)
@@ -798,6 +796,9 @@ class p7_cs_cli_:
                 model_map = self.solve_objective_haar(dirty_map, psf_map, psf_threshold, psf_cutoff, lambda_cs, lambda_estimate)
             else:
                 print("selecting starlet regularization")
+                if not starlet_levels:
+                    print("no starlet levels defined. Setting starlet_levels=1")
+                    starlet_levels=1
                 model_map = self.solve_objective_starlet(dirty_map, psf_map, psf_threshold, psf_cutoff, lambda_cs, starlet_levels, lambda_estimate)
 
             self.write_image(imagename+".model", model_map, dimensions)

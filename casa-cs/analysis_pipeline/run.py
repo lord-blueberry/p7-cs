@@ -45,7 +45,31 @@ def createTestImage():
 
     np.savetxt("test_psf", test_map, delimiter=", ")
 
-create_csv()
+
+def create_centroids():
+    inFolder = "/home/jon/Documents/images"
+    outFolder = "./centroid_csv"
+    algorithms = ["positive_deconv","L1","L2","TV","haar","starlets"]
+    dimensions = (64,64)
+
+    for alg in algorithms:
+        i = 1
+        output_map = np.zeros(dimensions).flatten()
+        for timestep in os.listdir(os.path.join(inFolder, alg)):
+            for imageName in os.listdir(os.path.join(inFolder, alg, timestep)):
+                if imageName.split(".")[-1] == "model":
+                    image = _casac.image().newimage(infile=os.path.join(inFolder, alg, timestep, imageName))
+                    map = np.reshape(image.getchunk(), dimensions)[0:dimensions[0], 0:dimensions[1]]
+                    if map.max() > 0:
+                        output_map[np.argmax(map)] = i
+                    else:
+                        print("img has no max: "+os.path.join(alg,timestep,imageName))
+            i = i + 1
+        np.savetxt(os.path.join(outFolder,alg+".csv"),np.reshape(output_map,dimensions), delimiter=',')
+
+
+create_centroids()
+#create_csv()
 
 #createTestImage()
 #
