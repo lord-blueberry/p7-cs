@@ -73,8 +73,11 @@ class p7_cs_cli_:
             psf= psf[lo:hi,lo:hi] #reduce psf size
         psf = np.fliplr(np.flipud(psf))
 
+        #setParam('DistributedMIPJobs',1)
+        #setParam('WorkerPool', 'server1062.cs.technik.fhnw.ch:61000')
+
         model = Model("starlet regularizer")
-        model.Params.method = 0  # GRB Primal Simplex
+        model.Params.method = 0 # GRB Primal Simplex == 0   Barrier == 2, concurrent = 3
         psf_sum = model.addVars(dirty_map.shape[0], dirty_map.shape[1], lb=-GRB.INFINITY)
         pixel_flat = []
         pixelArr = []
@@ -111,6 +114,81 @@ class p7_cs_cli_:
         print("done psf modelling " + str(elapsed_time))
 
         return model, psf_sum, pixelArr, pixel_flat
+
+    def model_peak(self, dirty_map, psf_map, psf_threshold, cut_psf=False):
+        psf = psf_map.copy()
+        psf[np.absolute(psf) < float(psf_threshold)] = 0  # clip negative psf values
+
+        print("psf filled to " + str(float(np.count_nonzero(psf)) / psf.size * 100.0) + "%")
+
+        lo = int(math.ceil(psf.shape[0] / 4))
+        hi = psf.shape[0] - int(math.floor(psf.shape[0] / 4))
+        if cut_psf:
+            psf= psf[lo:hi,lo:hi] #reduce psf size
+        psf = np.fliplr(np.flipud(psf))
+
+        #setParam('DistributedMIPJobs',1)
+        #setParam('WorkerPool', 'server1062.cs.technik.fhnw.ch:61000')
+
+        model = Model("starlet regularizer")
+        model.Params.method = 0 # GRB Primal Simplex == 0   Barrier == 2, concurrent = 3
+        psf_sum = model.addVars(dirty_map.shape[0], dirty_map.shape[1], lb=-GRB.INFINITY)
+        pixel_flat = []
+        pixelArr = []
+        for x in range(0, dirty_map.shape[0]):
+            row = []
+            for y in range(0, dirty_map.shape[1]):
+                v = model.addVar(vtype=GRB.INTEGER)
+                row.append(v)
+                pixel_flat.append(v)
+            pixelArr.append(row)
+
+        XCenter = int(math.floor((psf.shape[0] - 1) / 2))
+        YCenter = int(math.floor((psf.shape[1] - 1) / 2))
+        print(psf[XCenter, YCenter])
+        start_time = time.time()
+        for x in range(0, dirty_map.shape[0]):
+            psfX0 = -min(x - XCenter, 0)
+            psfX1 = min(psf.shape[0] - 1, XCenter + (dirty_map.shape[0] - 1 - x))
+            X0 = max(x - XCenter, 0)
+            for y in range(0, dirty_map.shape[1]):
+                Y0 = max(y - YCenter, 0)
+                Y1 = min(y + (psf.shape[1] - YCenter - 1), dirty_map.shape[1] - 1)
+                psfY0 = -min(y - YCenter, 0)
+                psfY1 = min(psf.shape[1] - 1, YCenter + (dirty_map.shape[1] - 1 - y))
+
+                # print(x, psfX0, psfX1)
+                convolution = LinExpr()
+                for xp in range(0, psfX1 - psfX0 + 1):
+                    psf_cut = psf[xp + psfX0, psfY0:psfY1 + 1]
+                    pixel_cut = pixelArr[X0 + xp][Y0:Y1 + 1]
+                    convolution.addTerms(psf_cut, pixel_cut)
+                model.addConstr(psf_sum[x, y] == dirty_map[x, y] - convolution, "conv")
+        elapsed_time = time.time() - start_time
+        print("done psf modelling " + str(elapsed_time))
+
+        super = LinExpr()
+        for i in range(0,dirty_map.size):
+            super += pixel_flat[i]
+        model.addConstr(1 == super)
+
+        objective = QuadExpr()
+        for x in range(0, dirty_map.shape[0]):
+            for y in range(0, dirty_map.shape[1]):
+                # L2[Dirty - X * PSF]
+                objective += psf_sum[x, y] * psf_sum[x, y]
+
+        model.setObjective(objective, GRB.MINIMIZE)
+        model.optimize()
+        objective_val = model.getAttr(GRB.Attr.ObjVal)
+        print(objective_val)
+        results = np.zeros((dirty_map.shape[0], dirty_map.shape[1]))
+        for x in range(0, dirty_map.shape[0]):
+            for y in range(0, dirty_map.shape[0]):
+                results[x, y] = pixelArr[x][y].x
+
+        return results
+
 
     def solve_objective_clean(self, dirty_map, psf_map, psf_threshold, cut_psf):
         model, psf_sum, pixelArr, pixel_flat = self.model_psf(dirty_map, psf_map, psf_threshold,cut_psf)
@@ -192,6 +270,50 @@ class p7_cs_cli_:
         model.setObjective(objective, GRB.MINIMIZE)
         model.optimize()
 
+
+        results = np.zeros((dirty_map.shape[0], dirty_map.shape[1]))
+        for x in range(0, dirty_map.shape[0]):
+            for y in range(0, dirty_map.shape[0]):
+                results[x, y] = pixelArr[x][y].x
+
+        return results
+
+    def solve_objective_l1_l2(self, dirty_map, psf_map, psf_threshold, cut_psf, lambda_cs, lambda_estimate=None):
+        if lambda_estimate:
+            e = np.loadtxt(lambda_estimate[0], delimiter=',')
+            model_map = np.loadtxt(lambda_estimate[1], delimiter=',')
+            E = np.sum(np.absolute(model_map))
+            E = E + np.sum(np.absolute(np.square(model_map)))
+            lambda_cs = e / E
+            print("Miller lambda estimation e/E = " + str(lambda_cs))
+            print("e: " + str(e))
+            print("E: " + str(E))
+
+        model, psf_sum, pixelArr, pixel_flat = self.model_psf(dirty_map, psf_map, psf_threshold)
+
+        abs_pixels = model.addVars(dirty_map.shape[0], dirty_map.shape[1])
+        for x in range(0, dirty_map.shape[0]):
+            for y in range(dirty_map.shape[1]):
+                model.addGenConstrAbs(abs_pixels[x, y], pixelArr[x][y])
+
+        objective = QuadExpr()
+        for x in range(0, dirty_map.shape[0]):
+            for y in range(0, dirty_map.shape[1]):
+                # L2[Dirty - X * PSF]
+                objective += psf_sum[x, y] * psf_sum[x, y]
+
+        #L2
+        for x in range(0, dirty_map.shape[0]):
+            for y in range(dirty_map.shape[1]):
+                objective += lambda_cs * pixelArr[x][y] * pixelArr[x][y]
+
+        #L1
+        for x in range(0, dirty_map.shape[0]):
+            for y in range(dirty_map.shape[1]):
+                objective += lambda_cs * abs_pixels[x, y]
+
+        model.setObjective(objective, GRB.MINIMIZE)
+        model.optimize()
 
         results = np.zeros((dirty_map.shape[0], dirty_map.shape[1]))
         for x in range(0, dirty_map.shape[0]):
@@ -782,12 +904,18 @@ class p7_cs_cli_:
                 model_map, objective_val = self.solve_objective_clean(dirty_map, psf_map, psf_threshold, psf_cutoff)
                 np.savetxt(imagename+"_objectiveVal.csv", np.asarray(objective_val).reshape(1,), delimiter=',')
                 np.savetxt(imagename + "_solution.csv", model_map, delimiter=',')
+            elif cs_alg == 'peak':
+                print('selecting peak')
+                model_map = self.model_peak(dirty_map, psf_map, psf_threshold, psf_cutoff)
             elif cs_alg == "L1":
                 print("selecting L1 regularization")
                 model_map = self.solve_objective_l1(dirty_map, psf_map, psf_threshold, psf_cutoff, lambda_cs, lambda_estimate)
             elif cs_alg == "L2":
                 print("selecting L2 regularization")
                 model_map = self.solve_objective_l2(dirty_map, psf_map, psf_threshold, psf_cutoff, lambda_cs, lambda_estimate)
+            elif cs_alg == "L1+L2":
+                print("selecting L1+L2 mixed regularization")
+                model_map = self.solve_objective_l1_l2(dirty_map, psf_map, psf_threshold, psf_cutoff, lambda_cs, lambda_estimate)
             elif cs_alg == "TV":
                 print("selecting Total Variation regularization")
                 model_map = self.solve_objective_tv(dirty_map, psf_map, psf_threshold, psf_cutoff, lambda_cs, lambda_estimate)
