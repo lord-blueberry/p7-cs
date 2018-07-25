@@ -72,25 +72,11 @@ for s in range(0,4):
 		specmode = 'mfs'  # use multi-frequency synthesis to take into account all selected spectral channels within window!
 		# mode='channel'
 		imagename = '/home/jon/Documents/images/peak/centroid_'+str(s)+'_'+str(channel)
-		imsize = [100, 100] # size of the out image in pixels 
+		imsize = [80, 80] # size of the out image in pixels 
 		cell = ['1.0arcsec', '1.0arcsec'] 
 		phasecenter_sun = 'J2000 14h26m45.9 -14d31m25.0' # use RA DEC of the sun center (from, e.g., JPL Horizons)
-		
-
 		phasecenter_event = 'J2000 14h26m58.183 -14d30m34.521' # event center
 		stokes='I' 
 		interactive = False
 		p7_cs(vis=vis,spw=spw, specmode=specmode, phasecenter=phasecenter_event,niter=0,imagename=imagename, timerange=timerange,imsize=imsize,cell=cell,stokes=stokes,interactive=False, cs_alg=cs_alg, psf_threshold=0.02, psf_cutoff=False)
-
-
-
-
-
-
-
-
-
-
-
-
 

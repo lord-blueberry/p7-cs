@@ -138,7 +138,7 @@ class p7_cs_cli_:
         for x in range(0, dirty_map.shape[0]):
             row = []
             for y in range(0, dirty_map.shape[1]):
-                v = model.addVar(vtype=GRB.INTEGER)
+                v = model.addVar()
                 row.append(v)
                 pixel_flat.append(v)
             pixelArr.append(row)
@@ -167,10 +167,7 @@ class p7_cs_cli_:
         elapsed_time = time.time() - start_time
         print("done psf modelling " + str(elapsed_time))
 
-        super = LinExpr()
-        for i in range(0,dirty_map.size):
-            super += pixel_flat[i]
-        model.addConstr(1 == super)
+        model.addSOS(GRB.SOS_TYPE1, pixel_flat)
 
         objective = QuadExpr()
         for x in range(0, dirty_map.shape[0]):
