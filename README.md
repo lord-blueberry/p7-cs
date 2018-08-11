@@ -24,14 +24,21 @@ For an example dataset, download [SNR_G55_10s.calib.ms from here](https://casagu
 
 ### Additional parameters compared to tclean
 cs_alg=None
+
 lambda_cs=None
-psf_threshold=None,
-psf_cutoff=False, 
-starlet_levels=None, 
+
+psf_threshold=None
+
+psf_cutoff=False
+
+starlet_levels=Integer
+
+
+
 lambda_estimate=None
 
 ### Example Usage
-p7_cs(vis='SNR_G55_10s.calib.ms',niter=0,imagename=imagename, imsize=[128,128], cell='26arcsec', interactive=False, stokes='I', cs_alg='starlets', psf_threshold=0.02, psf_cutoff=False, lambda_estimate=lamb_est, wprojplanes = 1, pblimit=-1.0, starlet_levels=3)
+p7_cs(vis='SNR_G55_10s.calib.ms',niter=0,imagename='G55_starlets', imsize=[128,128], cell='26arcsec', interactive=False, stokes='I', cs_alg='starlets', psf_threshold=0.02, psf_cutoff=False, lambda_estimate=lamb_est, wprojplanes = 1, pblimit=-1.0, starlet_levels=3)
 
 
 
