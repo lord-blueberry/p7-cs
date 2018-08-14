@@ -44,7 +44,13 @@ starlet_levels=Integer How many stalets are used. Starlets has a multi-resolutio
 lambda_estimate=["XXX__objectiveVal.csv", "XXX_deconv_solution.csv"] used for the miller lambda estimation. The algorithm "positive_deconv" produces two extra csv files: "XXX__objectiveVal.csv" and "XXX_deconv_solution.csv". They are needed for the miller lambda estimation.
 
 ### Example Usage
-p7_cs(vis='SNR_G55_10s.calib.ms',niter=0,imagename='G55_starlets', imsize=[128,128], cell='26arcsec', interactive=False, stokes='I', cs_alg='starlets', starlet_levels=3, psf_threshold=0.02, psf_cutoff=False, lambda_estimate=["deconv_objectiveVal.csv", "deconv_solution.csv"], wprojplanes = 1, pblimit=-1.0, )
+deconvolve image and create basis for miller lambda estimation
+
+p7_cs(vis='SNR_G55_10s.calib.ms',niter=0,imagename="deconv", imsize=[128,128], cell='26arcsec', interactive=False, stokes='I', cs_alg='positive_deconv', psf_threshold=0.02, psf_cutoff=False, wprojplanes = 1, pblimit=-1.0)
+
+starlet regularization used in the project
+
+p7_cs(vis='SNR_G55_10s.calib.ms',niter=0,imagename='G55_starlets', imsize=[128,128], cell='26arcsec', interactive=False, stokes='I', cs_alg='starlets', starlet_levels=3, psf_threshold=0.02, psf_cutoff=False, lambda_estimate=["deconv_objectiveVal.csv", "deconv_solution.csv"], wprojplanes = 1, pblimit=-1.0)
 
 
 
