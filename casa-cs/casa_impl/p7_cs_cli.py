@@ -47,6 +47,7 @@ class p7_cs_cli_:
                 if not os.path.exists(d) or os.stat(s).st_mtime - os.stat(d).st_mtime > 1:
                     shutil.copy2(s, d)
 
+    @staticmethod
     def read_image(self, imagename, dimensions):
         img = _casac.image()
         dirty = img.newimage(infile=imagename)
@@ -54,6 +55,7 @@ class p7_cs_cli_:
         dirty.close()
         return map
 
+    @staticmethod
     def write_image(self, imagename, content, dimensions):
         img = _casac.image()
         dirty = img.newimage(infile=imagename)
@@ -61,6 +63,7 @@ class p7_cs_cli_:
         dirty.putchunk(out_reshaped)
         dirty.close()
 
+    @staticmethod
     def model_psf(self, dirty_map, psf_map, psf_threshold, cut_psf=False):
         psf = psf_map.copy()
         psf[np.absolute(psf) < float(psf_threshold)] = 0  # clip negative psf values
@@ -76,8 +79,8 @@ class p7_cs_cli_:
         #setParam('DistributedMIPJobs',1)
         #setParam('WorkerPool', 'server1062.cs.technik.fhnw.ch:61000')
 
-        model = Model("starlet regularizer")
-        model.Params.method = 0 # GRB Primal Simplex == 0   Barrier == 2, concurrent = 3
+        model = Model("cs reconstruction")
+        model.Params.method = 3 # GRB Primal Simplex == 0   Barrier == 2, concurrent = 3
         psf_sum = model.addVars(dirty_map.shape[0], dirty_map.shape[1], lb=-GRB.INFINITY)
         pixel_flat = []
         pixelArr = []
@@ -115,57 +118,9 @@ class p7_cs_cli_:
 
         return model, psf_sum, pixelArr, pixel_flat
 
+    @staticmethod
     def model_peak(self, dirty_map, psf_map, psf_threshold, cut_psf=False):
-        psf = psf_map.copy()
-        psf[np.absolute(psf) < float(psf_threshold)] = 0  # clip negative psf values
-
-        print("psf filled to " + str(float(np.count_nonzero(psf)) / psf.size * 100.0) + "%")
-
-        lo = int(math.ceil(psf.shape[0] / 4))
-        hi = psf.shape[0] - int(math.floor(psf.shape[0] / 4))
-        if cut_psf:
-            psf= psf[lo:hi,lo:hi] #reduce psf size
-        psf = np.fliplr(np.flipud(psf))
-
-        #setParam('DistributedMIPJobs',1)
-        #setParam('WorkerPool', 'server1062.cs.technik.fhnw.ch:61000')
-
-        model = Model("starlet regularizer")
-        model.Params.method = 0 # GRB Primal Simplex == 0   Barrier == 2, concurrent = 3
-        psf_sum = model.addVars(dirty_map.shape[0], dirty_map.shape[1], lb=-GRB.INFINITY)
-        pixel_flat = []
-        pixelArr = []
-        for x in range(0, dirty_map.shape[0]):
-            row = []
-            for y in range(0, dirty_map.shape[1]):
-                v = model.addVar()
-                row.append(v)
-                pixel_flat.append(v)
-            pixelArr.append(row)
-
-        XCenter = int(math.floor((psf.shape[0] - 1) / 2))
-        YCenter = int(math.floor((psf.shape[1] - 1) / 2))
-        print(psf[XCenter, YCenter])
-        start_time = time.time()
-        for x in range(0, dirty_map.shape[0]):
-            psfX0 = -min(x - XCenter, 0)
-            psfX1 = min(psf.shape[0] - 1, XCenter + (dirty_map.shape[0] - 1 - x))
-            X0 = max(x - XCenter, 0)
-            for y in range(0, dirty_map.shape[1]):
-                Y0 = max(y - YCenter, 0)
-                Y1 = min(y + (psf.shape[1] - YCenter - 1), dirty_map.shape[1] - 1)
-                psfY0 = -min(y - YCenter, 0)
-                psfY1 = min(psf.shape[1] - 1, YCenter + (dirty_map.shape[1] - 1 - y))
-
-                # print(x, psfX0, psfX1)
-                convolution = LinExpr()
-                for xp in range(0, psfX1 - psfX0 + 1):
-                    psf_cut = psf[xp + psfX0, psfY0:psfY1 + 1]
-                    pixel_cut = pixelArr[X0 + xp][Y0:Y1 + 1]
-                    convolution.addTerms(psf_cut, pixel_cut)
-                model.addConstr(psf_sum[x, y] == dirty_map[x, y] - convolution, "conv")
-        elapsed_time = time.time() - start_time
-        print("done psf modelling " + str(elapsed_time))
+        model, psf_sum, pixelArr, pixel_flat = self.model_psf(dirty_map, psf_map, psf_threshold, cut_psf)
 
         model.addSOS(GRB.SOS_TYPE1, pixel_flat)
 
@@ -186,7 +141,7 @@ class p7_cs_cli_:
 
         return results
 
-
+    @staticmethod
     def solve_objective_clean(self, dirty_map, psf_map, psf_threshold, cut_psf):
         model, psf_sum, pixelArr, pixel_flat = self.model_psf(dirty_map, psf_map, psf_threshold,cut_psf)
 
@@ -207,6 +162,7 @@ class p7_cs_cli_:
 
         return results, objective_val
 
+    @staticmethod
     def solve_objective_l1(self, dirty_map, psf_map, psf_threshold, cut_psf, lambda_cs, lambda_estimate=None):
         if lambda_estimate:
             e = np.loadtxt(lambda_estimate[0], delimiter=',')
@@ -244,6 +200,7 @@ class p7_cs_cli_:
 
         return results
 
+    @staticmethod
     def solve_objective_l2(self, dirty_map, psf_map, psf_threshold, cut_psf,lambda_cs,  lambda_estimate=None):
         if lambda_estimate:
             e = np.loadtxt(lambda_estimate[0], delimiter=',')
@@ -275,6 +232,7 @@ class p7_cs_cli_:
 
         return results
 
+    @staticmethod
     def solve_objective_l1_l2(self, dirty_map, psf_map, psf_threshold, cut_psf, lambda_cs, lambda_estimate=None):
         if lambda_estimate:
             e = np.loadtxt(lambda_estimate[0], delimiter=',')
@@ -319,6 +277,7 @@ class p7_cs_cli_:
 
         return results
 
+    @staticmethod
     def solve_objective_tv(self, dirty_map, psf_map, psf_threshold, cut_psf,lambda_cs,  lambda_estimate=None):
         if lambda_estimate:
             e = np.loadtxt(lambda_estimate[0], delimiter=',')
@@ -365,6 +324,7 @@ class p7_cs_cli_:
 
         return results
 
+    @staticmethod
     def solve_objective_haar(self, dirty_map, psf_map, psf_threshold, cut_psf, lambda_cs,  lambda_estimate=None):
         dimensions = dirty_map.size
         haar2d = np.zeros((dimensions, dimensions))
@@ -443,6 +403,7 @@ class p7_cs_cli_:
                 results_haar[x, y] = pixelArr[x][y].x
         return (results_haar)
 
+    @staticmethod
     def solve_objective_starlet(self, dirty_map, psf_map,psf_threshold, cut_psf, lambda_cs, starlet_levels,  lambda_estimate=None):
         casalog = self.__globals__['casalog']
         def calcSpline():
@@ -894,9 +855,8 @@ class p7_cs_cli_:
             dirty_map = self.read_image(imagename+".residual", dimensions)
             psf_map = self.read_image(imagename + ".psf", dimensions)
 
-
-
-            if cs_alg=="positive_deconv":
+            print(imagename)
+            if cs_alg =="positive_deconv":
                 print("selecting positive deconvolution")
                 model_map, objective_val = self.solve_objective_clean(dirty_map, psf_map, psf_threshold, psf_cutoff)
                 np.savetxt(imagename+"_objectiveVal.csv", np.asarray(objective_val).reshape(1,), delimiter=',')
@@ -927,25 +887,6 @@ class p7_cs_cli_:
                 model_map = self.solve_objective_starlet(dirty_map, psf_map, psf_threshold, psf_cutoff, lambda_cs, starlet_levels, lambda_estimate)
 
             self.write_image(imagename+".model", model_map, dimensions)
-
-            '''
-            if cs_alg == "positive clean":
-                imager.runMajorCycle()
-                imager.restoreImages()
-            else:
-                print("copy")
-                try:
-                    p7_cs_cli_.copytree(imagename + ".residual", imagename + ".image")
-                except Exception as inst:
-                    print(type(inst))  # the exception instance
-                    print(inst.args)  # arguments stored in .args
-                    print(inst)
-                    raise
-                print("wow")
-                residual = dirty_map - model_map
-                self.write_image(imagename+".residual", residual, dimensions)
-                self.write_image(imagename+".image", model_map + residual, dimensions)
-            '''
 
             imager.runMajorCycle()
             imager.restoreImages()
