@@ -23,7 +23,7 @@ In the CASA IPython interface (call CASA_ROOT/bin/casa), you can use the new p7_
 For an example dataset, download [SNR_G55_10s.calib.ms from here](https://casaguides.nrao.edu/index.php/VLA_CASA_Imaging-CASA5.0.0).
 
 ### Additional parameters compared to tclean
-*cs_alg= String*, this specifies the algorithm. Valid input:
+**cs_alg= String**, this specifies the algorithm. Valid input:
 * positive_deconv
 * L1
 * L2
@@ -33,13 +33,13 @@ For an example dataset, download [SNR_G55_10s.calib.ms from here](https://casagu
 * starlet
 (defaults to starlet if none specified)
 
-*lambda_cs=Float*, Specifies the lambda value for Compressed Sensing. If none is given, defaults to 0.05
+**lambda_cs=Float**, Specifies the lambda value for Compressed Sensing. If none is given, defaults to 0.05
 
-*psf_threshold=Float* used to truncate small parts of the PSF. Valid range is betweeen 0 and 1
+**psf_threshold=Float** used to truncate small parts of the PSF. Valid range is betweeen 0 and 1
 
-*psf_cutoff=False* used to reduce the psf to half it's size. This was not used in the final run
+**psf_cutoff=False** used to reduce the psf to half it's size. This was not used in the final run
 
-*starlet_levels=Integer* How many stalets are used. Starlets has a multi-resolution representation. The smallest starlet (Level 1) is 5 pixels wide. Each more level doubles the starlet size (Level 2 is 10 pixels, level 3 starlet is 20 pixels wide). Significantly impacts the runtime, level 3 was the maximum used in this project.
+**starlet_levels=Integer** How many stalets are used. Starlets has a multi-resolution representation. The smallest starlet (Level 1) is 5 pixels wide. Each more level doubles the starlet size (Level 2 is 10 pixels, level 3 starlet is 20 pixels wide). Significantly impacts the runtime, level 3 was the maximum used in this project.
 
 *lambda_estimate=["XXX__objectiveVal.csv", "XXX_deconv_solution.csv"]* used for the miller lambda estimation. The algorithm "positive_deconv" produces two extra csv files: "XXX__objectiveVal.csv" and "XXX_deconv_solution.csv". They are needed for the miller lambda estimation.
 
