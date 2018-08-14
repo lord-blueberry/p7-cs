@@ -25,11 +25,17 @@ For an example dataset, download [SNR_G55_10s.calib.ms from here](https://casagu
 ### Additional parameters compared to tclean
 cs_alg= String, this specifies the algorithm. Valid input:
 * positive_deconv
-*
+* L1
+* L2
+* L1+L2
+* haar
+* TV
+* starlet
+(defaults to starlet if none specified)
 
 lambda_cs=Float, Specifies the lambda value for Compressed Sensing. If none is given, defaults to 0.05
 
-psf_threshold=Float used to truncate small parts of the PSF. Valid range is [0,1]
+psf_threshold=Float used to truncate small parts of the PSF. Valid range is betweeen 0 and 1
 
 psf_cutoff=False used to reduce the psf to half it's size. This was not used in the final run
 
@@ -38,7 +44,7 @@ starlet_levels=Integer How many stalets are used. Starlets has a multi-resolutio
 lambda_estimate=["XXX__objectiveVal.csv", "XXX_deconv_solution.csv"] used for the miller lambda estimation. The algorithm "positive_deconv" produces two extra csv files: "XXX__objectiveVal.csv" and "XXX_deconv_solution.csv". They are needed for the miller lambda estimation.
 
 ### Example Usage
-p7_cs(vis='SNR_G55_10s.calib.ms',niter=0,imagename='G55_starlets', imsize=[128,128], cell='26arcsec', interactive=False, stokes='I', cs_alg='starlets'starlet_levels=3, psf_threshold=0.02, psf_cutoff=False, lambda_estimate=["deconv_objectiveVal.csv", "deconv_solution.csv"], wprojplanes = 1, pblimit=-1.0, )
+p7_cs(vis='SNR_G55_10s.calib.ms',niter=0,imagename='G55_starlets', imsize=[128,128], cell='26arcsec', interactive=False, stokes='I', cs_alg='starlets', starlet_levels=3, psf_threshold=0.02, psf_cutoff=False, lambda_estimate=["deconv_objectiveVal.csv", "deconv_solution.csv"], wprojplanes = 1, pblimit=-1.0, )
 
 
 
